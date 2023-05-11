@@ -18,12 +18,15 @@ DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 **************************************************************************************************/
 
+#include <cassert>
+#include <cstring>
 #include <math.h>
 
+#include "minisat/core/Solver.h"
+#include "minisat/core/SolverTypes.h"
 #include "minisat/mtl/Alg.h"
 #include "minisat/mtl/Sort.h"
 #include "minisat/utils/System.h"
-#include "minisat/core/Solver.h"
 
 using namespace Minisat;
 
@@ -443,43 +446,54 @@ bool Solver::litRedundant(Lit p)
     return true;
 }
 
-
 /*_________________________________________________________________________________________________
 |
-|  analyzeFinal : (p : Lit)  ->  [void]
-|  
+|  analyzeFinal : (confl : Clause*)  ->  [void]
+|
 |  Description:
-|    Specialized analysis procedure to express the final conflict in terms of assumptions.
-|    Calculates the (possibly empty) set of assumptions that led to the assignment of 'p', and
-|    stores the result in 'out_conflict'.
+|    Specialized analysis procedure to express the final conflict in terms of assumptions. The
+|    implementation is based on "Speeding Up Assumption-Based SAT" (Hickey & Bacchus, 2019).
 |________________________________________________________________________________________________@*/
-void Solver::analyzeFinal(Lit p, LSet& out_conflict)
+void Solver::analyzeFinal(CRef confl, LSet& out_conflict)
 {
+    assert(confl != CRef_Undef);
     out_conflict.clear();
-    out_conflict.insert(p);
 
-    if (decisionLevel() == 0)
-        return;
+    // Shadows the instance variable locally.
+    vec<CRef> clause_stack;
+    clause_stack.push(confl);
 
-    seen[var(p)] = 1;
+    while (clause_stack.size() > 0) {
+        const Clause &c = ca[clause_stack.last()];
+        clause_stack.pop();
 
-    for (int i = trail.size()-1; i >= trail_lim[0]; i--){
-        Var x = var(trail[i]);
-        if (seen[x]){
-            if (reason(x) == CRef_Undef){
-                assert(level(x) > 0);
-                out_conflict.insert(~trail[i]);
-            }else{
-                Clause& c = ca[reason(x)];
-                for (int j = 1; j < c.size(); j++)
-                    if (level(var(c[j])) > 0)
-                        seen[var(c[j])] = 1;
+        for (int i = 0; i < c.size(); ++i) {
+            Lit l = c[i];
+
+            // If we handled `l` already continue to the next literal.
+            if (seen[var(l)]) {
+                continue;
             }
-            seen[x] = 0;
+
+            // Mark literal as handled.
+            seen[var(l)] = 1;
+
+            // If ~l does not have a reason clause, it is an assumption which we add
+            // to `out_conflict`.
+            if (reason(var(l)) == CRef_Undef) {
+                out_conflict.insert(l);
+                continue;
+            }
+
+            // Otherwise mark the reason as required for processing.
+            clause_stack.push(reason(var(l)));
         }
     }
 
-    seen[var(p)] = 0;
+    // Clear out `seen`.
+    //
+    // We can't use `seen.clear()` because we have to preserve the size.
+    memset(seen.begin(), /*value=*/0, nVars());
 }
 
 
@@ -713,6 +727,10 @@ lbool Solver::search(int nof_conflicts)
             // CONFLICT
             conflicts++; conflictC++;
             if (decisionLevel() == 0) return l_False;
+            if (decisionLevel() == 1) {
+              analyzeFinal(confl, conflict);
+              return l_False;
+            }
 
             learnt_clause.clear();
             analyze(confl, learnt_clause, backtrack_level);
@@ -745,6 +763,7 @@ lbool Solver::search(int nof_conflicts)
 
         }else{
             // NO CONFLICT
+          
             if ((nof_conflicts >= 0 && conflictC >= nof_conflicts) || !withinBudget()){
                 // Reached bound on number of conflicts:
                 progress_estimate = progressEstimate();
@@ -759,35 +778,31 @@ lbool Solver::search(int nof_conflicts)
                 // Reduce the set of learnt clauses:
                 reduceDB();
 
-            Lit next = lit_Undef;
-            while (decisionLevel() < assumptions.size()){
-                // Perform user provided assumption:
-                Lit p = assumptions[decisionLevel()];
-                if (value(p) == l_True){
-                    // Dummy decision level:
-                    newDecisionLevel();
-                }else if (value(p) == l_False){
-                    analyzeFinal(~p, conflict);
-                    return l_False;
-                }else{
-                    next = p;
-                    break;
+            if (decisionLevel() == 0) {
+                newDecisionLevel();
+                for (size_t i = 0; i < assumptions.size(); ++i) {
+                    if (value(assumptions[i]) == l_False) {
+                        conflict.clear();
+                        conflict.insert(assumptions[i]);
+                        return l_False;
+                    }
+                    if (value(assumptions[i]) != l_True) {
+                        uncheckedEnqueue(assumptions[i]);
+                    }
                 }
-            }
-
-            if (next == lit_Undef){
+            } else {
                 // New variable decision:
                 decisions++;
-                next = pickBranchLit();
+                Lit next = pickBranchLit();
 
                 if (next == lit_Undef)
                     // Model found:
                     return l_True;
-            }
 
-            // Increase decision level and enqueue 'next'
-            newDecisionLevel();
-            uncheckedEnqueue(next);
+                // Increase decision level and enqueue 'next'
+                newDecisionLevel();
+                uncheckedEnqueue(next);
+            }
         }
     }
 }
