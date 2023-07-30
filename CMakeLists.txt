@@ -196,6 +196,7 @@ add_custom_target(uninstall
 set(MINISAT_LIB_SOURCES
     minisat/utils/Options.cc
     minisat/utils/System.cc
+    minisat/core/Info.cc
     minisat/core/Solver.cc
     minisat/simp/SimpSolver.cc)
 
