@@ -481,6 +481,7 @@ void Solver::analyzeFinal(CRef confl, LSet& out_conflict)
             // If ~l does not have a reason clause, it is an assumption which we add
             // to `out_conflict`.
             if (reason(var(l)) == CRef_Undef) {
+                assert(level(var(l)) > 0);
                 out_conflict.insert(l);
                 continue;
             }
@@ -783,7 +784,7 @@ lbool Solver::search(int nof_conflicts)
                 for (size_t i = 0; i < assumptions.size(); ++i) {
                     if (value(assumptions[i]) == l_False) {
                         conflict.clear();
-                        conflict.insert(assumptions[i]);
+                        conflict.insert(~assumptions[i]);
                         return l_False;
                     }
                     if (value(assumptions[i]) != l_True) {
