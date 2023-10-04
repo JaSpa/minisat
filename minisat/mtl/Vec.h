@@ -88,6 +88,10 @@ public:
     const T& operator [] (Size index) const { return data[index]; }
     T&       operator [] (Size index)       { return data[index]; }
 
+    // Iterator interface:
+    const T* begin() const { return &data[0]; }
+    const T* end()   const { return &data[sz]; }
+
     // Duplicatation (preferred instead):
     void copyTo(vec<T>& copy) const { copy.clear(); copy.growTo(sz); for (Size i = 0; i < sz; i++) copy[i] = data[i]; }
     void moveTo(vec<T>& dest) { dest.clear(true); dest.data = data; dest.sz = sz; dest.cap = cap; data = NULL; sz = 0; cap = 0; }
