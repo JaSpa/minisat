@@ -23,6 +23,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #define Minisat_SolverTypes_h
 
 #include <assert.h>
+#include <iterator>
 
 #include "minisat/mtl/IntTypes.h"
 #include "minisat/mtl/Alg.h"
@@ -135,6 +136,7 @@ inline lbool toLbool(int   v) { return lbool((uint8_t)v);  }
 // Clause -- a simple class for representing a clause:
 
 class Clause;
+class ClauseLitIterator;
 typedef RegionAllocator<uint32_t>::Ref CRef;
 
 class Clause {
@@ -147,6 +149,7 @@ class Clause {
     union { Lit lit; float act; uint32_t abs; CRef rel; } data[0];
 
     friend class ClauseAllocator;
+    friend class ClauseLitIterator;
 
     // NOTE: This constructor cannot be used directly (doesn't allocate enough memory).
     Clause(const vec<Lit>& ps, bool use_extra, bool learnt) {
@@ -216,6 +219,9 @@ public:
 
     Lit          subsumes    (const Clause& other) const;
     void         strengthen  (Lit p);
+
+    ClauseLitIterator begin() const;
+    ClauseLitIterator end() const;
 };
 
 
@@ -288,7 +294,7 @@ class ClauseAllocator
 };
 
 //=================================================================================================
-// Simple iterator classes (for iterating over clauses and top-level assignments):
+// Simple iterator classes (for iterating over clauses, top-level assignments, and a clause's literals):
 
 class ClauseIterator {
     const ClauseAllocator& ca;
@@ -316,6 +322,36 @@ public:
     bool operator==(const TrailIterator& ti) const { return lits == ti.lits; }
     bool operator!=(const TrailIterator& ti) const { return lits != ti.lits; }
 };
+
+
+class ClauseLitIterator {
+  const Clause *clause;
+  int index;
+
+public:
+  ClauseLitIterator(const Clause *c, int i = 0) : clause(c), index(i) {}
+
+  using difference_type   = int;
+  using value_type        = Lit;
+  using pointer           = const Lit*;
+  using reference         = const Lit&;
+  using iterator_category = std::forward_iterator_tag;
+
+  reference operator*() const {
+    assert(0 <= index && index < clause->size() && "ClauseLitIterator out-of-bounds");
+    return clause->data[index].lit;
+  }
+  pointer operator->() const { return &**this; }
+
+  ClauseLitIterator &operator++()    { index++; return *this; }
+  ClauseLitIterator  operator++(int) { return ClauseLitIterator(clause, index++); }
+
+  bool operator==(const ClauseLitIterator &it) const { assert(clause == it.clause); return index == it.index; }
+  bool operator!=(const ClauseLitIterator &it) const { assert(clause == it.clause); return index != it.index; }
+};
+
+inline ClauseLitIterator Clause::begin() const { return ClauseLitIterator(this); }
+inline ClauseLitIterator Clause::end  () const { return ClauseLitIterator(this, size()); }
 
 
 //=================================================================================================
