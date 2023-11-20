@@ -191,6 +191,7 @@ protected:
     vec<CRef>           learnts;          // List of learnt clauses.
     vec<Lit>            trail;            // Assignment stack; stores all assigments made in the order they were made.
     vec<int>            trail_lim;        // Separator indices for different decision levels in 'trail'.
+    vec<Lit>            saved_trail;      // The literals from level 1, after a backtrack to level 0.
     vec<Lit>            assumptions;      // Current set of assumptions provided to solve by the user.
 
     VMap<double>        activity;         // A heuristic measurement of the activity of a variable.
@@ -249,6 +250,10 @@ protected:
     void     analyzeFinal     (CRef confl, LSet& out_conflict);
     bool     litRedundant     (Lit p);                                                 // (helper method for 'analyze()')
     lbool    search           (int nof_conflicts);                                     // Search for a given number of conflicts.
+    bool     handleSearchConfl(CRef confl, vec<Lit> &learnt_clause);                   // Handle a unit propagation conflict. Returns `false` if there is
+                                                                                       // a conflict or fills `learnt_clause` and returns `true`.
+    bool     enqueueAssumps   ();                                                      // Enqueues all assumptions and restores the saved trail as far as
+                                                                                       // applicable. Returns `false` in case of a conflict.
     lbool    solve_           ();                                                      // Main solve method (assumptions given in 'assumptions').
     void     reduceDB         ();                                                      // Reduce the set of learnt clauses.
     void     removeSatisfied  (vec<CRef>& cs);                                         // Shrink 'cs' to contain only non-satisfied clauses.

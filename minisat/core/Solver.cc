@@ -18,6 +18,7 @@ DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 **************************************************************************************************/
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <math.h>
@@ -231,20 +232,39 @@ bool Solver::satisfied(const Clause& c) const {
 
 // Revert to the state at given level (keeping all assignment at 'level' but not beyond).
 //
-void Solver::cancelUntil(int level) {
+void Solver::cancelUntil(int level)
+{
+    assert(level >= 0 && "invalid backtrack level");
     if (decisionLevel() <= level)
         return;
 
+    // If we go back to level 0 we save the trail on level 1.
+    if (level == 0) {
+        saved_trail.clear();
+        int startLevel1 = trail_lim[0];
+        int endLevel1 = decisionLevel() == 1 ? trail.size() : trail_lim[1];
+        for (int i = startLevel1; i < endLevel1; ++i) {
+            Lit l = trail[i];
+            CRef r = reason(var(l));
+            if (r == CRef_Undef) {
+                assert(std::find(assumptions.begin(), assumptions.end(), l) != assumptions.end() &&
+                       "non-assumption literal without reason clause");
+            } else {
+                assert(std::find(ca[r].begin(), ca[r].end(), l) != ca[r].end() &&
+                       "literal not in its reason clause");
+                saved_trail.push(l);
+            }
+        }
+    }
+
+    // Do the actual backtracking.
     for (int c = trail.size() - 1; c >= trail_lim[level]; c--) {
         Var x = var(trail[c]);
         assigns[x] = l_Undef;
-
         if (phase_saving > 1 || (phase_saving == 1 && c > trail_lim.last()))
             polarity[x] = sign(trail[c]);
-
         insertVarOrder(x);
     }
-
     qhead = trail_lim[level];
     trail.shrink(trail.size() - trail_lim[level]);
     trail_lim.shrink(trail_lim.size() - level);
@@ -606,6 +626,11 @@ struct reduceDB_lt {
 };
 void Solver::reduceDB()
 {
+    // This is a safety measure: usually reduceDB won't be called while we have
+    // a saved trail. However, subclasses might add calls to `reduceDB` in
+    // between calls to `solve`.
+    saved_trail.clear();
+
     int     i, j;
     double  extra_lim = cla_inc / learnts.size();    // Remove any clause below this activity
 
@@ -711,6 +736,98 @@ bool Solver::simplify()
     return true;
 }
 
+bool Solver::handleSearchConfl(CRef confl, vec<Lit> &learnt_clause)
+{
+    assert(confl != CRef_Undef && "not a conflict");
+    conflicts++;
+
+    if (decisionLevel() == 0)
+        return false;
+
+    if (decisionLevel() == 1) {
+        analyzeFinal(confl, conflict);
+        return false;
+    }
+
+    int backtrack_level;
+    learnt_clause.clear();
+    analyze(confl, learnt_clause, backtrack_level);
+    cancelUntil(backtrack_level);
+
+    if (learnt_clause.size() == 1) {
+        uncheckedEnqueue(learnt_clause[0]);
+    } else {
+        CRef cr = ca.alloc(learnt_clause, true);
+        learnts.push(cr);
+        attachClause(cr);
+        claBumpActivity(ca[cr]);
+        uncheckedEnqueue(learnt_clause[0], cr);
+    }
+
+    varDecayActivity();
+    claDecayActivity();
+
+    if (--learntsize_adjust_cnt == 0) {
+        learntsize_adjust_confl *= learntsize_adjust_inc;
+        learntsize_adjust_cnt = (int)learntsize_adjust_confl;
+        max_learnts *= learntsize_inc;
+
+        if (verbosity >= 1)
+            printf("| %9d | %7d %8d %8d | %8d %8d %6.0f | %6.3f %% |\n",
+                   (int)conflicts,
+                   (int)dec_vars - (trail_lim.size() == 0 ? trail.size() : trail_lim[0]),
+                   nClauses(), (int)clauses_literals, (int)max_learnts,
+                   nLearnts(), (double)learnts_literals / nLearnts(),
+                   progressEstimate() * 100);
+    }
+
+    // Conflict was successfully handled. Problem may still be SAT.
+    return true;
+}
+
+bool Solver::enqueueAssumps()
+{
+    assert(decisionLevel() == 0);
+    newDecisionLevel();
+
+    // Enqueue all assumptions.
+    for (Lit assump : assumptions) {
+        if (value(assump) == l_False) {
+            conflict.clear();
+            conflict.insert(~assump);
+            return false;
+        }
+        if (value(assump) == l_Undef) {
+            uncheckedEnqueue(assump);
+        }
+    }
+
+    // Enqueue other saved literals.
+    for (Lit saved : saved_trail) {
+        CRef reason_ref = reason(var(saved));
+        assert(reason_ref != CRef_Undef && "saved literal's reason has been invalidated");
+
+        if (value(saved) == l_True) {
+            continue;
+        }
+
+        if (value(saved) == l_False) {
+            analyzeFinal(reason(var(saved)), conflict);
+            return false;
+        }
+
+        const Clause &reason = ca[reason_ref];
+        bool restore = std::all_of(reason.begin(), reason.end(), [=](Lit l) {
+            return l == saved || value(l) != l_Undef;
+        });
+        if (restore)
+            uncheckedEnqueue(saved, reason_ref);
+    }
+
+    // Completed without a conflict.
+    return true;
+}
+
 
 /*_________________________________________________________________________________________________
 |
@@ -728,94 +845,53 @@ bool Solver::simplify()
 lbool Solver::search(int nof_conflicts)
 {
     assert(ok);
-    int         backtrack_level;
     int         conflictC = 0;
     vec<Lit>    learnt_clause;
     starts++;
 
-    for (;;){
+    for (;;) {
         CRef confl = propagate();
-        if (confl != CRef_Undef){
-            // CONFLICT
-            conflicts++; conflictC++;
-            if (decisionLevel() == 0) return l_False;
-            if (decisionLevel() == 1) {
-              analyzeFinal(confl, conflict);
-              return l_False;
-            }
-
-            learnt_clause.clear();
-            analyze(confl, learnt_clause, backtrack_level);
-            cancelUntil(backtrack_level);
-
-            if (learnt_clause.size() == 1){
-                uncheckedEnqueue(learnt_clause[0]);
-            }else{
-                CRef cr = ca.alloc(learnt_clause, true);
-                learnts.push(cr);
-                attachClause(cr);
-                claBumpActivity(ca[cr]);
-                uncheckedEnqueue(learnt_clause[0], cr);
-            }
-
-            varDecayActivity();
-            claDecayActivity();
-
-            if (--learntsize_adjust_cnt == 0){
-                learntsize_adjust_confl *= learntsize_adjust_inc;
-                learntsize_adjust_cnt    = (int)learntsize_adjust_confl;
-                max_learnts             *= learntsize_inc;
-
-                if (verbosity >= 1)
-                    printf("| %9d | %7d %8d %8d | %8d %8d %6.0f | %6.3f %% |\n", 
-                           (int)conflicts, 
-                           (int)dec_vars - (trail_lim.size() == 0 ? trail.size() : trail_lim[0]), nClauses(), (int)clauses_literals, 
-                           (int)max_learnts, nLearnts(), (double)learnts_literals/nLearnts(), progressEstimate()*100);
-            }
-
-        }else{
-            // NO CONFLICT
-          
-            if ((nof_conflicts >= 0 && conflictC >= nof_conflicts) || !withinBudget()){
-                // Reached bound on number of conflicts:
-                progress_estimate = progressEstimate();
-                cancelUntil(0);
-                return l_Undef; }
-
-            // Simplify the set of problem clauses:
-            if (decisionLevel() == 0 && !simplify())
+        if (confl != CRef_Undef) {
+            conflictC++;
+            if (!handleSearchConfl(confl, learnt_clause))
                 return l_False;
-
-            if (learnts.size()-nAssigns() >= max_learnts)
-                // Reduce the set of learnt clauses:
-                reduceDB();
-
-            if (decisionLevel() == 0) {
-                newDecisionLevel();
-                for (size_t i = 0; i < assumptions.size(); ++i) {
-                    if (value(assumptions[i]) == l_False) {
-                        conflict.clear();
-                        conflict.insert(~assumptions[i]);
-                        return l_False;
-                    }
-                    if (value(assumptions[i]) != l_True) {
-                        uncheckedEnqueue(assumptions[i]);
-                    }
-                }
-            } else {
-                // New variable decision:
-                decisions++;
-                Lit next = pickBranchLit();
-
-                if (next == lit_Undef)
-                    // Model found:
-                    return l_True;
-
-                // Increase decision level and enqueue 'next'
-                newDecisionLevel();
-                uncheckedEnqueue(next);
-            }
+            continue;
         }
+
+        if ((nof_conflicts >= 0 && conflictC >= nof_conflicts) || !withinBudget()) {
+            // Reached bound on number of conflicts:
+            progress_estimate = progressEstimate();
+            cancelUntil(0);
+            return l_Undef;
+        }
+
+        // Simplify the set of problem clauses:
+        if (decisionLevel() == 0 && !simplify())
+            return l_False;
+
+        // In case we are on decision level 0, it is important that
+        // `enqueueAssumps()` is called *before* `reduceDB()`. `reduceDB()` will clear our any saved trail
+        if (decisionLevel() == 0) {
+            if (!enqueueAssumps())
+                return l_False;
+            continue;
+        }
+
+        if (learnts.size() - nAssigns() >= max_learnts)
+            // Reduce the set of learnt clauses:
+            reduceDB();
+
+        // New variable decision:
+        decisions++;
+        Lit next = pickBranchLit();
+
+        if (next == lit_Undef)
+            // Model found:
+            return l_True;
+
+        // Increase decision level and enqueue 'next'
+        newDecisionLevel();
+        uncheckedEnqueue(next);
     }
 }
 
