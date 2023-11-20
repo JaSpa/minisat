@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
 
 project(minisat)
 
@@ -41,6 +41,7 @@ include (GenerateExportHeader)
 #--------------------------------------------------------------------------------------------------
 # Compile flags:
 
+set(CMAKE_CXX_STANDARD 11)
 add_definitions(-D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS)
 
 
