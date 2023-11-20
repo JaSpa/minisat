@@ -185,13 +185,18 @@ protected:
         ShrinkStackElem(uint32_t _i, Lit _l) : i(_i), l(_l){}
     };
 
+    struct SavedLit {
+      Lit lit;
+      CRef reason;
+    };
+
     // Solver state:
     //
     vec<CRef>           clauses;          // List of problem clauses.
     vec<CRef>           learnts;          // List of learnt clauses.
     vec<Lit>            trail;            // Assignment stack; stores all assigments made in the order they were made.
     vec<int>            trail_lim;        // Separator indices for different decision levels in 'trail'.
-    vec<Lit>            saved_trail;      // The literals from level 1, after a backtrack to level 0.
+    vec<SavedLit>       saved_trail;      // The literals from level 1, after a backtrack to level 0.
     vec<Lit>            assumptions;      // Current set of assumptions provided to solve by the user.
 
     VMap<double>        activity;         // A heuristic measurement of the activity of a variable.

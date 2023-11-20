@@ -250,9 +250,9 @@ void Solver::cancelUntil(int level)
                 assert(std::find(assumptions.begin(), assumptions.end(), l) != assumptions.end() &&
                        "non-assumption literal without reason clause");
             } else {
-                assert(std::find(ca[r].begin(), ca[r].end(), l) != ca[r].end() &&
-                       "literal not in its reason clause");
-                saved_trail.push(l);
+                assert(ca[r][0] == l && "literal not first in its reason clause");
+                SavedLit saved = { l, r };
+                saved_trail.push(saved);
             }
         }
     }
@@ -626,11 +626,6 @@ struct reduceDB_lt {
 };
 void Solver::reduceDB()
 {
-    // This is a safety measure: usually reduceDB won't be called while we have
-    // a saved trail. However, subclasses might add calls to `reduceDB` in
-    // between calls to `solve`.
-    saved_trail.clear();
-
     int     i, j;
     double  extra_lim = cla_inc / learnts.size();    // Remove any clause below this activity
 
@@ -803,25 +798,35 @@ bool Solver::enqueueAssumps()
     }
 
     // Enqueue other saved literals.
-    for (Lit saved : saved_trail) {
-        CRef reason_ref = reason(var(saved));
-        assert(reason_ref != CRef_Undef && "saved literal's reason has been invalidated");
-
-        if (value(saved) == l_True) {
+    for (SavedLit saved : saved_trail) {
+        // Check that the saved literal's reason did not change.
+        if (saved.reason != reason(var(saved.lit))) {
             continue;
         }
 
-        if (value(saved) == l_False) {
-            analyzeFinal(reason(var(saved)), conflict);
+        // Check that the saved literal still comes as the first literal in the
+        // reason clause.
+        const Clause &reason = ca[saved.reason];
+        if (reason[0] != saved.lit) {
+            continue;
+        }
+
+        // Nothing to do if the literal is already satisfied.
+        if (value(saved.lit) == l_True) {
+            continue;
+        }
+
+        // It's a conflict if the literal was implied the other way round.
+        if (value(saved.lit) == l_False) {
+            analyzeFinal(saved.reason, conflict);
             return false;
         }
 
-        const Clause &reason = ca[reason_ref];
-        bool restore = std::all_of(reason.begin(), reason.end(), [=](Lit l) {
-            return l == saved || value(l) != l_Undef;
-        });
-        if (restore)
-            uncheckedEnqueue(saved, reason_ref);
+        // Check that the clause is unit. This is the fact iff the second
+        // literal is not l_Undef.
+        if (value(reason[1]) != l_Undef) {
+            uncheckedEnqueue(saved.lit, saved.reason);
+        }
     }
 
     // Completed without a conflict.
