@@ -822,9 +822,14 @@ bool Solver::enqueueAssumps()
             return false;
         }
 
-        // Check that the clause is unit. This is the fact iff the second
-        // literal is not l_Undef.
-        if (value(reason[1]) != l_Undef) {
+        // We can enqueue the saved literal if the clause is unit. It is unit if
+        // all other literals have been assigned l_False.
+        bool is_unit = true;
+        for (int i = 1; is_unit && i < reason.size(); ++i) {
+            is_unit &= value(reason[1]) == l_False;
+        }
+
+        if (is_unit) {
             uncheckedEnqueue(saved.lit, saved.reason);
         }
     }
@@ -874,12 +879,11 @@ lbool Solver::search(int nof_conflicts)
         if (decisionLevel() == 0 && !simplify())
             return l_False;
 
-        // In case we are on decision level 0, it is important that
-        // `enqueueAssumps()` is called *before* `reduceDB()`. `reduceDB()` will clear our any saved trail
         if (decisionLevel() == 0) {
             if (!enqueueAssumps())
                 return l_False;
-            continue;
+            else
+                continue;
         }
 
         if (learnts.size() - nAssigns() >= max_learnts)
