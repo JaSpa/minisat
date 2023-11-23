@@ -496,13 +496,13 @@ void Solver::analyzeFinal(CRef confl, LSet& out_conflict)
         for (int i = 0; i < c.size(); ++i) {
             Lit l = c[i];
 
-            // Variables decided on level 0 are not part of the conflict.
-            if (level(var(l)) == 0) {
+            // If we handled `l` already continue to the next literal.
+            if (seen[var(l)]) {
                 continue;
             }
 
-            // If we handled `l` already continue to the next literal.
-            if (seen[var(l)]) {
+            // Variables decided on level 0 are not part of the conflict.
+            if (level(var(l)) == 0) {
                 continue;
             }
 
