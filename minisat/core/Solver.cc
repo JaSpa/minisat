@@ -531,6 +531,30 @@ void Solver::analyzeFinal(CRef confl, LSet& out_conflict)
 
 void Solver::uncheckedEnqueue(Lit p, CRef from)
 {
+#if 0
+    printf("enqueue %6d ~> % 6d\n", from == CRef_Undef ? -1 : from, (var(p)+1) * (sign(p) ? -1 : 1));
+    if (from != CRef_Undef) {
+        Clause &c = ca[from];
+        bool good = true;
+        for (int i = 0; i < c.size(); ++i) {
+            if (value(c[i]) == l_True) {
+                printf("  literal %d is assigned TRUE\n", (var(c[i])+1) * (sign(c[i]) ? -1 : 1));
+                good = false;
+            }
+        }
+        assert(good);
+    }
+#endif
+
+#ifndef NDEBUG
+    if (from != CRef_Undef) {
+        const Clause &c = ca[from];
+        for (int i = 0; i < c.size(); ++i){
+            assert(value(c[i]) != l_True && "already satsified clause acts as reason");
+        }
+    }
+#endif
+
     assert(value(p) == l_Undef);
     assigns[var(p)] = lbool(!sign(p));
     vardata[var(p)] = mkVarData(from, decisionLevel());
@@ -826,10 +850,11 @@ bool Solver::enqueueAssumps()
         // all other literals have been assigned l_False.
         bool is_unit = true;
         for (int i = 1; is_unit && i < reason.size(); ++i) {
-            is_unit &= value(reason[1]) == l_False;
+            is_unit &= value(reason[i]) == l_False;
         }
 
         if (is_unit) {
+            //printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
             uncheckedEnqueue(saved.lit, saved.reason);
         }
     }
