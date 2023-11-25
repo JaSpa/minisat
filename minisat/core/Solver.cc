@@ -545,16 +545,7 @@ void Solver::uncheckedEnqueue(Lit p, CRef from)
         assert(good);
     }
 #endif
-
-#ifndef NDEBUG
-    if (from != CRef_Undef) {
-        const Clause &c = ca[from];
-        for (int i = 0; i < c.size(); ++i){
-            assert(value(c[i]) != l_True && "already satsified clause acts as reason");
-        }
-    }
-#endif
-
+    assert(from == CRef_Undef || !satisfied(ca[from]) && "already satsified clause used as reason");
     assert(value(p) == l_Undef);
     assigns[var(p)] = lbool(!sign(p));
     vardata[var(p)] = mkVarData(from, decisionLevel());
@@ -1186,6 +1177,16 @@ void Solver::relocAll(ClauseAllocator& to)
             clauses[j++] = clauses[i];
         }
     clauses.shrink(i - j);
+
+    // All saved literals:
+    //
+    for (i = j = 0; i < saved_trail.size(); i++) {
+      if (!isRemoved(saved_trail[i].reason)) {
+        ca.reloc(saved_trail[i].reason, to);
+        saved_trail[j++] = saved_trail[i];
+      }
+    }
+    saved_trail.shrink(i - j);
 }
 
 
