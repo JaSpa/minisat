@@ -513,6 +513,7 @@ void Solver::analyzeFinal(CRef confl, LSet& out_conflict)
             // to `out_conflict`.
             if (reason(var(l)) == CRef_Undef) {
                 assert(level(var(l)) > 0);
+                assert(std::find(assumptions.begin(), assumptions.end(), ~l) != assumptions.end() && "conflict literal not an assumption");
                 out_conflict.insert(l);
                 continue;
             }
