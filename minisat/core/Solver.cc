@@ -832,23 +832,35 @@ bool Solver::enqueueAssumps()
             continue;
         }
 
-        // It's a conflict if the literal was implied the other way round.
+        // There are two cases in which we are not allowed to restore the saved
+        // literal because the implication saved.reason => saved.lit does not
+        // hold:
+        //
+        //    1. (at least) one of the other literals is assigned `true`.
+        //    2. (at least) one of the other literals is unassigned
+        //
+        // We iterate through the literals (starting at the second one,
+        // ie. lit_idx=1) and abort once we find one which is not assigned
+        // `false`.
+        int lit_idx = 0;
+        while (++lit_idx < reason.size() && value(reason[lit_idx]) == l_False) {
+          // Empty loop body.
+        }
+
+        // If we did not reach the end we skip this saved literal.
+        if (lit_idx < reason.size()) {
+          continue;
+        }
+
+        // All literals in the reason clause have been assigned `false`. We have
+        // a conflict.
         if (value(saved.lit) == l_False) {
             analyzeFinal(saved.reason, conflict);
             return false;
         }
 
-        // We can enqueue the saved literal if the clause is unit. It is unit if
-        // all other literals have been assigned l_False.
-        bool is_unit = true;
-        for (int i = 1; is_unit && i < reason.size(); ++i) {
-            is_unit &= value(reason[i]) == l_False;
-        }
-
-        if (is_unit) {
-            //printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
-            uncheckedEnqueue(saved.lit, saved.reason);
-        }
+        //printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
+        uncheckedEnqueue(saved.lit, saved.reason);
     }
 
     // Completed without a conflict.
