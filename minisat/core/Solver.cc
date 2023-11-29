@@ -34,6 +34,9 @@ using namespace Minisat;
 //=================================================================================================
 // Options:
 
+#ifndef MINISAT_SAVE_TRAIL_DEFAULT
+#define MINISAT_SAVE_TRAIL_DEFAULT true
+#endif
 
 static const char* _cat = "CORE";
 
@@ -45,6 +48,7 @@ static IntOption     opt_ccmin_mode        (_cat, "ccmin-mode",  "Controls confl
 static IntOption     opt_phase_saving      (_cat, "phase-saving", "Controls the level of phase saving (0=none, 1=limited, 2=full)", 2, IntRange(0, 2));
 static BoolOption    opt_rnd_init_act      (_cat, "rnd-init",    "Randomize the initial activity", false);
 static BoolOption    opt_luby_restart      (_cat, "luby",        "Use the Luby restart sequence", true);
+static BoolOption    opt_trail_savings     (_cat, "save-trail",  "Save & restore the trail on level 1 when backtracking to level 0", MINISAT_SAVE_TRAIL_DEFAULT);
 static IntOption     opt_restart_first     (_cat, "rfirst",      "The base restart interval", 100, IntRange(1, INT32_MAX));
 static DoubleOption  opt_restart_inc       (_cat, "rinc",        "Restart interval increase factor", 2, DoubleRange(1, false, HUGE_VAL, false));
 static DoubleOption  opt_garbage_frac      (_cat, "gc-frac",     "The fraction of wasted memory allowed before a garbage collection is triggered",  0.20, DoubleRange(0, false, HUGE_VAL, false));
@@ -88,6 +92,7 @@ Solver::Solver() :
   , solves(0), starts(0), decisions(0), rnd_decisions(0), propagations(0), conflicts(0)
   , dec_vars(0), num_clauses(0), num_learnts(0), clauses_literals(0), learnts_literals(0), max_literals(0), tot_literals(0)
 
+  , trail_savings_     (opt_trail_savings)
   , watches            (WatcherDeleted(ca))
   , order_heap         (VarOrderLt(activity))
   , ok                 (true)
@@ -239,7 +244,7 @@ void Solver::cancelUntil(int level)
         return;
 
     // If we go back to level 0 we save the trail on level 1.
-    if (level == 0) {
+    if (level == 0 && trail_savings()) {
         saved_trail.clear();
         int startLevel1 = trail_lim[0];
         int endLevel1 = decisionLevel() == 1 ? trail.size() : trail_lim[1];
@@ -813,7 +818,8 @@ bool Solver::enqueueAssumps()
         }
     }
 
-    // Enqueue other saved literals.
+    // Enqueue other saved literals. If trail savings is disabled this vector
+    // will be empty.
     for (SavedLit saved : saved_trail) {
         // Check that the saved literal's reason did not change.
         if (saved.reason != reason(var(saved.lit))) {

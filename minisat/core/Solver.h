@@ -151,6 +151,17 @@ public:
     uint64_t solves, starts, decisions, rnd_decisions, propagations, conflicts;
     uint64_t dec_vars, num_clauses, num_learnts, clauses_literals, learnts_literals, max_literals, tot_literals;
 
+private:
+    bool trail_savings_;
+
+public:
+    bool trail_savings() const { return trail_savings_; }
+    void set_trail_savings(bool active, bool deallocate = true) {
+        trail_savings_ = active;
+        if (!active)
+            saved_trail.clear(deallocate);
+    }
+
 protected:
 
     // Helper structures:

@@ -44,6 +44,12 @@ include (GenerateExportHeader)
 set(CMAKE_CXX_STANDARD 11)
 add_definitions(-D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS)
 
+option(MINISAT_SAVE_TRAIL_DEFAULT "Enable trail savings technique by default" ON)
+if (MINISAT_SAVE_TRAIL_DEFAULT)
+    add_definitions(-DMINISAT_SAVE_TRAIL_DEFAULT=true)
+else()
+    add_definitions(-DMINISAT_SAVE_TRAIL_DEFAULT=false)
+endif()
 
 #--------------------------------------------------------------------------------------------------
 option(STATICCOMPILE "Compile static library and executable" OFF)
