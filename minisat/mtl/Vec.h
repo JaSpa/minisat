@@ -28,6 +28,17 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "minisat/mtl/IntTypes.h"
 #include "minisat/mtl/XAlloc.h"
 
+#if defined(__has_feature)
+# if __has_feature(address_sanitizer)
+#  include <sanitizer/asan_interface.h>
+#  define MINISAT_ANNOT_CONTIGOUS_CONTAINER(a,b,c,d) __sanitizer_annotate_contiguous_container(a,b,c,d)
+# endif
+#endif
+
+#ifndef MINISAT_ANNOT_CONTIGOUS_CONTAINER
+#define MINISAT_ANNOT_CONTIGOUS_CONTAINER(w,x,y,z)
+#endif
+
 namespace Minisat {
 
 //=================================================================================================
@@ -62,8 +73,16 @@ public:
 
     // Size operations:
     Size     size     (void) const   { return sz; }
-    void     shrink   (Size nelems)  { assert(nelems <= sz); for (Size i = 0; i < nelems; i++) sz--, data[sz].~T(); }
-    void     shrink_  (Size nelems)  { assert(nelems <= sz); sz -= nelems; }
+    void     shrink   (Size nelems)  {
+        assert(nelems <= sz);
+        for (Size i = 0; i < nelems; i++) sz--, data[sz].~T();
+        MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[sz + nelems], &data[sz]);
+    }
+    void     shrink_  (Size nelems)  {
+        assert(nelems <= sz);
+        sz -= nelems;
+        MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[sz + nelems], &data[sz], &data[cap]);
+    }
     int      capacity (void) const   { return cap; }
     void     capacity (Size min_cap);
     void     growTo   (Size size);
@@ -71,15 +90,31 @@ public:
     void     clear    (bool dealloc = false);
 
     // Stack interface:
-    void     push  (void)              { if (sz == cap) capacity(sz+1); new (&data[sz]) T(); sz++; }
-    //void     push  (const T& elem)     { if (sz == cap) capacity(sz+1); data[sz++] = elem; }
-    void     push  (const T& elem)     { if (sz == cap) capacity(sz+1); new (&data[sz++]) T(elem); }
-    void     push_ (const T& elem)     { assert(sz < cap); data[sz++] = elem; }
-    void     pop   (void)              { assert(sz > 0); sz--, data[sz].~T(); }
+    //
     // NOTE: it seems possible that overflow can happen in the 'sz+1' expression of 'push()', but
     // in fact it can not since it requires that 'cap' is equal to INT_MAX. This in turn can not
     // happen given the way capacities are calculated (below). Essentially, all capacities are
     // even, but INT_MAX is odd.
+    void push(void) {
+      if (sz == cap) capacity(sz+1);
+      MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[sz], &data[sz+1]);
+      new (&data[sz++]) T();
+    }
+    void push(const T& elem) {
+      if (sz == cap) capacity(sz+1);
+      MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[sz], &data[sz+1]);
+      new (&data[sz++]) T(elem);
+    }
+    void push_(const T& elem) {
+      assert(sz < cap);
+      MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[sz], &data[sz+1]);
+      data[sz++] = elem;
+    }
+    void pop(void) {
+      assert(sz > 0);
+      data[sz--].~T();
+      MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[sz+1], &data[sz]);
+    }
 
     const T& last  (void) const        { return data[sz-1]; }
     T&       last  (void)              { return data[sz-1]; }
@@ -103,9 +138,12 @@ void vec<T,_Size>::capacity(Size min_cap) {
     if (cap >= min_cap) return;
     Size add = max((min_cap - cap + 1) & ~1, ((cap >> 1) + 2) & ~1);   // NOTE: grow by approximately 3/2
     const Size size_max = std::numeric_limits<Size>::max();
+    if (data)
+      MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[sz], &data[0]);
     if ( ((size_max <= std::numeric_limits<int>::max()) && (add > size_max - cap))
     ||   (((data = (T*)::realloc(data, (cap += add) * sizeof(T))) == NULL) && errno == ENOMEM) )
         throw OutOfMemoryException();
+    MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[0], &data[sz]);
  }
 
 
@@ -113,24 +151,29 @@ template<class T, class _Size>
 void vec<T,_Size>::growTo(Size size, const T& pad) {
     if (sz >= size) return;
     capacity(size);
+    MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[sz], &data[size]);
     for (Size i = sz; i < size; i++) data[i] = pad;
-    sz = size; }
-
+    sz = size;
+}
 
 template<class T, class _Size>
 void vec<T,_Size>::growTo(Size size) {
     if (sz >= size) return;
     capacity(size);
+    MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[sz], &data[size]);
     for (Size i = sz; i < size; i++) new (&data[i]) T();
-    sz = size; }
-
+    sz = size;
+}
 
 template<class T, class _Size>
 void vec<T,_Size>::clear(bool dealloc) {
     if (data != NULL){
         for (Size i = 0; i < sz; i++) data[i].~T();
+        MINISAT_ANNOT_CONTIGOUS_CONTAINER(&data[0], &data[cap], &data[sz], &data[0]);
         sz = 0;
-        if (dealloc) free(data), data = NULL, cap = 0; } }
+        if (dealloc) free(data), data = NULL, cap = 0;
+    }
+}
 
 //=================================================================================================
 }
