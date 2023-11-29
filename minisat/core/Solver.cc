@@ -117,6 +117,33 @@ Solver::~Solver()
 {
 }
 
+void Solver::clone(Solver &s) const
+{
+    assert(s.okay() && s.nClauses() == 0 && s.nVars() == 0 &&
+           "cloning to a non-empty solver");
+
+    // Create variables.
+    while (s.nVars() < nVars()) {
+        s.newVar();
+    }
+
+    // Copy all clauses.
+    for (ClauseIterator it = clausesBegin(); it != clausesEnd(); ++it) {
+        // Skip removed clauses.
+        if (isRemoved(it.ref()))
+            continue;
+
+        int size = it->size();
+        s.add_tmp.clear();
+        s.add_tmp.capacity(size);
+        for (int i = 0; i < size; ++i)
+            s.add_tmp.push((*it)[i]);
+
+        bool ok = s.addClause_(s.add_tmp);
+        assert(ok && "conflict during clause cloning");
+        (void)ok;
+    }
+}
 
 //=================================================================================================
 // Minor methods:
@@ -864,6 +891,25 @@ bool Solver::enqueueAssumps()
             analyzeFinal(saved.reason, conflict);
             return false;
         }
+
+        // At this point we claim that the current assignment implies
+        // `saved.lit`. This can be verified using the check below.
+#ifndef NDEBUG
+        // We create a new solver with trail savings disabled.
+        Solver verifier;
+        verifier.budgetOff();
+        verifier.set_trail_savings(false);
+        // The new solver gets the same CNF as our current solver.
+        clone(verifier);
+        // The current assignments become assumptions.
+        verifier.assumptions.capacity(trail.size() + 1);
+        trail.copyTo(verifier.assumptions);
+        // As an additional assumption we add the negation of what we claim is
+        // implied.
+        verifier.assumptions.push(~saved.lit);
+        // The result should be UNSAT. Otherwise the implication is not correct.
+        assert(verifier.solve_() == l_False && "incorrect implication");
+#endif
 
         //printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
         uncheckedEnqueue(saved.lit, saved.reason);

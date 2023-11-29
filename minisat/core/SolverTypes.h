@@ -299,6 +299,8 @@ public:
 
     void operator++(){ crefs++; }
     const Clause& operator*() const { return ca[*crefs]; }
+    const Clause* operator->() const { return ca.lea(*crefs); }
+    CRef ref() const { return *crefs; }
 
     // NOTE: does not compare that references use the same clause-allocator:
     bool operator==(const ClauseIterator& ci) const { return crefs == ci.crefs; }
