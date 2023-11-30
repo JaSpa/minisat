@@ -34,22 +34,20 @@ SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 # Dependencies:
 
 find_package(ZLIB)
+
+set(Boost_VERBOSE TRUE)
+find_package(Boost REQUIRED COMPONENTS iostreams)
+
 include_directories(${ZLIB_INCLUDE_DIR})
+include_directories(${Boost_INCLUDE_DIR})
 include_directories(${minisat_SOURCE_DIR})
 include (GenerateExportHeader)
 
 #--------------------------------------------------------------------------------------------------
 # Compile flags:
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 add_definitions(-D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS)
-
-option(MINISAT_SAVE_TRAIL_DEFAULT "Enable trail savings technique by default" ON)
-if (MINISAT_SAVE_TRAIL_DEFAULT)
-    add_definitions(-DMINISAT_SAVE_TRAIL_DEFAULT=true)
-else()
-    add_definitions(-DMINISAT_SAVE_TRAIL_DEFAULT=false)
-endif()
 
 #--------------------------------------------------------------------------------------------------
 option(STATICCOMPILE "Compile static library and executable" OFF)
@@ -208,7 +206,7 @@ set(MINISAT_LIB_SOURCES
     minisat/simp/SimpSolver.cc)
 
 add_library(minisat ${MINISAT_LIB_SOURCES})
-target_link_libraries(minisat ${ZLIB_LIBRARY})
+target_link_libraries(minisat ${ZLIB_LIBRARY} ${Boost_LIBRARIES})
 
 add_executable(minisat_core minisat/core/Main.cc)
 add_executable(minisat_simp minisat/simp/Main.cc)

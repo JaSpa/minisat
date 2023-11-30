@@ -19,24 +19,41 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 **************************************************************************************************/
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
+#include <cctype>
+#include <cinttypes>
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <math.h>
+#include <exception>
+#include <fstream>
+#include <iomanip>
+#include <ios>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <sys/stat.h>
+
+#include <boost/iostreams/device/file.hpp>
+#include <boost/iostreams/device/file_descriptor.hpp>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_streambuf.hpp>
+#include <boost/iostreams/stream.hpp>
 
 #include "minisat/core/Solver.h"
 #include "minisat/core/SolverTypes.h"
 #include "minisat/mtl/Alg.h"
 #include "minisat/mtl/Sort.h"
+#include "minisat/utils/Options.h"
 #include "minisat/utils/System.h"
 
 using namespace Minisat;
 
 //=================================================================================================
 // Options:
-
-#ifndef MINISAT_SAVE_TRAIL_DEFAULT
-#define MINISAT_SAVE_TRAIL_DEFAULT true
-#endif
 
 static const char* _cat = "CORE";
 
@@ -48,11 +65,13 @@ static IntOption     opt_ccmin_mode        (_cat, "ccmin-mode",  "Controls confl
 static IntOption     opt_phase_saving      (_cat, "phase-saving", "Controls the level of phase saving (0=none, 1=limited, 2=full)", 2, IntRange(0, 2));
 static BoolOption    opt_rnd_init_act      (_cat, "rnd-init",    "Randomize the initial activity", false);
 static BoolOption    opt_luby_restart      (_cat, "luby",        "Use the Luby restart sequence", true);
-static BoolOption    opt_trail_savings     (_cat, "save-trail",  "Save & restore the trail on level 1 when backtracking to level 0", MINISAT_SAVE_TRAIL_DEFAULT);
+static BoolOption    opt_trail_savings     (_cat, "save-trail",  "Save & restore the trail on level 1 when backtracking to level 0", true);
+static BoolOption    opt_trail_savings_chk (_cat, "verify-trail","Verify restored trail components using a nested solver", false);
 static IntOption     opt_restart_first     (_cat, "rfirst",      "The base restart interval", 100, IntRange(1, INT32_MAX));
 static DoubleOption  opt_restart_inc       (_cat, "rinc",        "Restart interval increase factor", 2, DoubleRange(1, false, HUGE_VAL, false));
 static DoubleOption  opt_garbage_frac      (_cat, "gc-frac",     "The fraction of wasted memory allowed before a garbage collection is triggered",  0.20, DoubleRange(0, false, HUGE_VAL, false));
 static IntOption     opt_min_learnts_lim   (_cat, "min-learnts", "Minimum learnt clause limit",  0, IntRange(0, INT32_MAX));
+static StringOption  opt_replay_dir        (_cat, "replay-dir",  "When set, directory where to write replay information");
 
 
 //=================================================================================================
@@ -110,7 +129,10 @@ Solver::Solver() :
   , conflict_budget    (-1)
   , propagation_budget (-1)
   , asynch_interrupt   (false)
-{}
+{
+    if (trail_savings_ && opt_trail_savings_chk)
+        trail_savings_ = trail_savings_mode::checked();
+}
 
 
 Solver::~Solver()
@@ -895,20 +917,22 @@ bool Solver::enqueueAssumps()
         // At this point we claim that the current assignment implies
         // `saved.lit`. This can be verified using the check below.
 #ifndef NDEBUG
-        // We create a new solver with trail savings disabled.
-        Solver verifier;
-        verifier.budgetOff();
-        verifier.set_trail_savings(false);
-        // The new solver gets the same CNF as our current solver.
-        clone(verifier);
-        // The current assignments become assumptions.
-        verifier.assumptions.capacity(trail.size() + 1);
-        trail.copyTo(verifier.assumptions);
-        // As an additional assumption we add the negation of what we claim is
-        // implied.
-        verifier.assumptions.push(~saved.lit);
-        // The result should be UNSAT. Otherwise the implication is not correct.
-        assert(verifier.solve_() == l_False && "incorrect implication");
+        if (trail_savings() == trail_savings_mode::checked()) {
+            // We create a new solver with trail savings disabled.
+            Solver verifier;
+            verifier.budgetOff();
+            verifier.set_trail_savings(false);
+            // The new solver gets the same CNF as our current solver.
+            clone(verifier);
+            // The current assignments become assumptions.
+            verifier.assumptions.capacity(trail.size() + 1);
+            trail.copyTo(verifier.assumptions);
+            // As an additional assumption we add the negation of what we claim is
+            // implied.
+            verifier.assumptions.push(~saved.lit);
+            // The result should be UNSAT. Otherwise the implication is not correct.
+            assert(verifier.solve_() == l_False && "incorrect implication");
+        }
 #endif
 
         //printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
@@ -1031,11 +1055,39 @@ static double luby(double y, int x){
 // NOTE: assumptions passed in member-variable 'assumptions'.
 lbool Solver::solve_()
 {
+    static std::atomic_uint Global_solve_counter;
+    std::string replay_base_path;
+
     model.clear();
     conflict.clear();
     if (!ok) return l_False;
 
     solves++;
+
+    const char *replay_dir = opt_replay_dir;
+    if (replay_dir != nullptr && replay_dir[0] != '\0') {
+        replay_base_path = (
+            std::ostringstream{}
+                << opt_replay_dir << "/solve"
+                << std::setw(5) << std::setfill('0') << Global_solve_counter++).str();
+
+        auto base_len = replay_base_path.size();
+        replay_base_path += ".cnf.gz";
+
+        bool skip_bad_assump = std::any_of(assumptions.begin(), assumptions.end(), [this](Lit a) {
+            return value(a) == l_False;
+        });
+
+        if (!skip_bad_assump && !toDimacsGz(replay_base_path.c_str(), assumptions)) {
+            // Disable further replay writes.
+            opt_replay_dir = nullptr;
+            // Disable wrting the result.
+            replay_base_path.clear();
+        } else {
+            // Strip the extension.
+            replay_base_path.resize(base_len);
+        }
+    }
 
     max_learnts = nClauses() * learntsize_factor;
     if (max_learnts < min_learnts_lim)
@@ -1064,6 +1116,49 @@ lbool Solver::solve_()
     if (verbosity >= 1)
         printf("===============================================================================\n");
 
+    if (!replay_base_path.empty()) {
+        const char *write_kind = nullptr;
+        try {
+            std::ofstream file;
+            auto base_len = replay_base_path.size();
+
+            write_kind = "solve result";
+            replay_base_path += ".result";
+
+            errno = 0;
+            file.open(replay_base_path.c_str(), std::ios_base::trunc);
+            if (!file) throw std::runtime_error(strerror(errno));
+
+            if (status == l_True) file << "SAT";
+            else if (status == l_False) file << "UNSAT";
+            else file << "???";
+
+            file.close();
+            if (!file) throw std::runtime_error(strerror(errno));
+
+            if (status == l_False) {
+                replay_base_path.resize(base_len);
+                write_kind = "conflict clause";
+                replay_base_path += ".conflict";
+
+                file.open(replay_base_path.c_str(), std::ios_base::trunc);
+                if (!file) throw std::runtime_error(strerror(errno));
+
+                for (Lit l : conflict.toVec())
+                    file << (sign(l) ? "-" : "") << var(l) + 1 << '\n';
+
+                file.close();
+                if (!file) throw std::runtime_error(strerror(errno));
+            }
+        } catch (const std::exception &exc) {
+            fprintf(stderr, "failed to write %s to %s (%s)", write_kind, replay_base_path.c_str(), exc.what());
+            opt_replay_dir = nullptr;
+        }
+    }
+
+    assert((status != l_False || std::all_of(conflict.toVec().begin(), conflict.toVec().end(), [this](Lit c) {
+        return std::find(assumptions.begin(), assumptions.end(), ~c) != assumptions.end();
+    })) && "incorrect conflict");
 
     if (status == l_True){
         // Extend & copy model:
@@ -1117,15 +1212,51 @@ static Var mapVar(Var x, vec<Var>& map, Var& max)
     return map[x];
 }
 
+bool Solver::toDimacsGz(const char *file, const vec<Lit>& assumps) const
+{
+    namespace io = boost::iostreams;
+
+    try {
+        errno = 0;
+        io::file_sink cnf_sink(file, std::ios_base::binary | std::ios_base::trunc);
+        if (!cnf_sink.is_open()) {
+            fprintf(stderr, "can't open replay CNF file %s (%s)\n", file, strerror(errno));
+            return false;
+        }
+
+        io::filtering_ostreambuf cnf_buf;
+        cnf_buf.push(io::gzip_compressor());
+        cnf_buf.push(cnf_sink);
+
+        std::ostream cnf(&cnf_buf);
+        toDimacs(cnf, assumps);
+        if (!cnf.flush()) {
+            fprintf(stderr, "failed to write replay CNF file %s (%s)\n", file, strerror(errno));
+            return false;
+        }
+        return true;
+    } catch (const std::exception &exc) {
+        fprintf(stderr, "failed to write replay CNF file %s: %s\n", file, exc.what());
+        return false;
+    }
+}
 
 void Solver::toDimacs(FILE* f, Clause& c, vec<Var>& map, Var& max)
+{
+    namespace io = boost::iostreams;
+    io::file_descriptor_sink f_sink(fileno(f), io::never_close_handle);
+    io::stream<io::file_descriptor_sink> f_stream(f_sink);
+    toDimacs(f_stream, c, map, max);
+}
+
+void Solver::toDimacs(std::ostream& os, const Clause& c, vec<Var>& map, Var& max) const
 {
     if (satisfied(c)) return;
 
     for (int i = 0; i < c.size(); i++)
         if (value(c[i]) != l_False)
-            fprintf(f, "%s%d ", sign(c[i]) ? "-" : "", mapVar(var(c[i]), map, max)+1);
-    fprintf(f, "0\n");
+            os << (sign(c[i]) ? "-" : "") << mapVar(var(c[i]), map, max) + 1 << ' ';
+    os << "0\n";
 }
 
 
@@ -1141,9 +1272,17 @@ void Solver::toDimacs(const char *file, const vec<Lit>& assumps)
 
 void Solver::toDimacs(FILE* f, const vec<Lit>& assumps)
 {
+    namespace io = boost::iostreams;
+    io::file_descriptor_sink f_sink(fileno(f), io::never_close_handle);
+    io::stream<io::file_descriptor_sink> f_stream(f_sink);
+    toDimacs(f_stream, assumps);
+}
+
+void Solver::toDimacs(std::ostream& os, const vec<Lit>& assumps) const
+{
     // Handle case when solver is in contradictory state:
     if (!ok){
-        fprintf(f, "p cnf 1 2\n1 0\n-1 0\n");
+        os << "p cnf 1 2\nc contradiction\n1 0\n-1 0\n";
         return; }
 
     vec<Var> map; Var max = 0;
@@ -1157,7 +1296,7 @@ void Solver::toDimacs(FILE* f, const vec<Lit>& assumps)
         
     for (int i = 0; i < clauses.size(); i++)
         if (!satisfied(ca[clauses[i]])){
-            Clause& c = ca[clauses[i]];
+            const Clause& c = ca[clauses[i]];
             for (int j = 0; j < c.size(); j++)
                 if (value(c[j]) != l_False)
                     mapVar(var(c[j]), map, max);
@@ -1166,15 +1305,24 @@ void Solver::toDimacs(FILE* f, const vec<Lit>& assumps)
     // Assumptions are added as unit clauses:
     cnt += assumps.size();
 
-    fprintf(f, "p cnf %d %d\n", max, cnt);
+    os << "p cnf " << max << ' ' << cnt << '\n';
 
+    auto section_header = [&os](int n, const char *header) {
+        if (n <= 0) return;
+        os << "c\n";
+        os << "c " << n << ' ' << header << (n == 1 ? "" : "s") << '\n';
+        os << "c\n";
+    };
+
+    section_header(assumps.size(), "assumption");
     for (int i = 0; i < assumps.size(); i++){
         assert(value(assumps[i]) != l_False);
-        fprintf(f, "%s%d 0\n", sign(assumps[i]) ? "-" : "", mapVar(var(assumps[i]), map, max)+1);
+        os << (sign(assumps[i]) ? "-" : "") << mapVar(var(assumps[i]), map, max) + 1 << " 0\n";
     }
 
+    section_header(cnt - assumps.size(), "clause");
     for (int i = 0; i < clauses.size(); i++)
-        toDimacs(f, ca[clauses[i]], map, max);
+        toDimacs(os, ca[clauses[i]], map, max);
 
     if (verbosity > 0)
         printf("Wrote DIMACS with %d variables and %d clauses.\n", max, cnt);

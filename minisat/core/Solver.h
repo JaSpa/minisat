@@ -28,8 +28,32 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "minisat/utils/Options.h"
 #include "minisat/core/SolverTypes.h"
 
+#include <cinttypes>
+#include <ostream>
 
 namespace Minisat {
+
+class trail_savings_mode {
+    uint8_t v;
+
+    constexpr explicit trail_savings_mode(int v) : v(v) {}
+
+public:
+    trail_savings_mode() : trail_savings_mode{disabled()} {}
+    trail_savings_mode(bool enabled) : trail_savings_mode{(int)enabled} {}
+
+    bool is_enabled() const { return v != 0; }
+
+    static constexpr trail_savings_mode disabled() { return trail_savings_mode{0}; }
+    static constexpr trail_savings_mode enabled() { return trail_savings_mode{1}; }
+    static constexpr trail_savings_mode checked() { return trail_savings_mode{2}; }
+
+    explicit operator bool() const { return is_enabled(); }
+
+    bool operator==(trail_savings_mode b) const { return v == b.v; }
+    bool operator!=(trail_savings_mode b) const { return v != b.v; }
+};
+
 
 //=================================================================================================
 // Solver -- the main class:
@@ -83,11 +107,15 @@ public:
     void    toDimacs     (const char *file, const vec<Lit>& assumps);
     void    toDimacs     (FILE* f, Clause& c, vec<Var>& map, Var& max);
 
+    void    toDimacs     (std::ostream& os, const vec<Lit>& assumps) const;
+    void    toDimacs     (std::ostream& os, const Clause& c, vec<Var>& map, Var& max) const;
+
     // Convenience versions of 'toDimacs()':
     void    toDimacs     (const char* file);
     void    toDimacs     (const char* file, Lit p);
     void    toDimacs     (const char* file, Lit p, Lit q);
     void    toDimacs     (const char* file, Lit p, Lit q, Lit r);
+    bool    toDimacsGz   (const char* file, const vec<Lit>& assumps) const;
     
     // Variable mode:
     // 
@@ -156,14 +184,13 @@ public:
     uint64_t dec_vars, num_clauses, num_learnts, clauses_literals, learnts_literals, max_literals, tot_literals;
 
 private:
-    bool trail_savings_;
+    trail_savings_mode trail_savings_;
 
 public:
-    bool trail_savings() const { return trail_savings_; }
-    void set_trail_savings(bool active, bool deallocate = true) {
-        trail_savings_ = active;
-        if (!active)
-            saved_trail.clear(deallocate);
+    trail_savings_mode trail_savings() const { return trail_savings_; }
+    void set_trail_savings(trail_savings_mode v, bool deallocate = true) {
+        trail_savings_ = v;
+        if (!v) saved_trail.clear(deallocate);
     }
 
 protected:
