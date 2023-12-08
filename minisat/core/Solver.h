@@ -299,8 +299,8 @@ protected:
     lbool    search           (int nof_conflicts);                                     // Search for a given number of conflicts.
     bool     handleSearchConfl(CRef confl, vec<Lit> &learnt_clause);                   // Handle a unit propagation conflict. Returns `false` if there is
                                                                                        // a conflict or fills `learnt_clause` and returns `true`.
-    bool     enqueueAssumps   ();                                                      // Enqueues all assumptions and restores the saved trail as far as
-                                                                                       // applicable. Returns `false` in case of a conflict.
+    bool     enqueueAssumps   ();                                                      // Enqueues all assumptions. Returns `false` in case of a conflict.
+    bool     restoreTrail     ();                                                      // Restore the saved trail. Returns `false` in case of a conflict.
     lbool    solve_           ();                                                      // Main solve method (assumptions given in 'assumptions').
     void     reduceDB         ();                                                      // Reduce the set of learnt clauses.
     void     removeSatisfied  (vec<CRef>& cs);                                         // Shrink 'cs' to contain only non-satisfied clauses.

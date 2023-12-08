@@ -21,17 +21,13 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <algorithm>
 #include <atomic>
 #include <cassert>
-#include <cctype>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <exception>
 #include <fstream>
 #include <iomanip>
-#include <ios>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -39,6 +35,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 #include <boost/iostreams/device/file.hpp>
 #include <boost/iostreams/device/file_descriptor.hpp>
+#include <boost/iostreams/device/null.hpp>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_streambuf.hpp>
 #include <boost/iostreams/stream.hpp>
@@ -66,7 +63,9 @@ static IntOption     opt_phase_saving      (_cat, "phase-saving", "Controls the 
 static BoolOption    opt_rnd_init_act      (_cat, "rnd-init",    "Randomize the initial activity", false);
 static BoolOption    opt_luby_restart      (_cat, "luby",        "Use the Luby restart sequence", true);
 static BoolOption    opt_trail_savings     (_cat, "save-trail",  "Save & restore the trail on level 1 when backtracking to level 0", true);
+#ifndef NDEBUG // verification is meaningless in NDEBUG builds
 static BoolOption    opt_trail_savings_chk (_cat, "verify-trail","Verify restored trail components using a nested solver", false);
+#endif
 static IntOption     opt_restart_first     (_cat, "rfirst",      "The base restart interval", 100, IntRange(1, INT32_MAX));
 static DoubleOption  opt_restart_inc       (_cat, "rinc",        "Restart interval increase factor", 2, DoubleRange(1, false, HUGE_VAL, false));
 static DoubleOption  opt_garbage_frac      (_cat, "gc-frac",     "The fraction of wasted memory allowed before a garbage collection is triggered",  0.20, DoubleRange(0, false, HUGE_VAL, false));
@@ -130,8 +129,10 @@ Solver::Solver() :
   , propagation_budget (-1)
   , asynch_interrupt   (false)
 {
+#ifndef NDEBUG
     if (trail_savings_ && opt_trail_savings_chk)
         trail_savings_ = trail_savings_mode::checked();
+#endif
 }
 
 
@@ -867,6 +868,30 @@ bool Solver::enqueueAssumps()
         }
     }
 
+    return true;
+}
+
+bool Solver::restoreTrail()
+{
+    // The assumptions should be enqueued by now but nothing more.
+    assert(decisionLevel() == 1);
+
+    // If the trail savings mode is set to `verify` we create a solver to verify the restored
+    // implications.
+    std::unique_ptr<Solver> restore_verifier;
+
+    // Verification is meaningless in NDEBUG builds because the result is verified using `assert()`.
+#ifndef NDEBUG
+    if (trail_savings() == trail_savings_mode::checked()) {
+        // Create a new solver with trail savings disabled.
+        restore_verifier = std::make_unique<Solver>();
+        restore_verifier->budgetOff();
+        restore_verifier->set_trail_savings(false);
+        // Clone our CNF into the new solver.
+        clone(*restore_verifier);
+    }
+#endif
+
     // Enqueue other saved literals. If trail savings is disabled this vector
     // will be empty.
     for (SavedLit saved : saved_trail) {
@@ -915,25 +940,17 @@ bool Solver::enqueueAssumps()
         }
 
         // At this point we claim that the current assignment implies
-        // `saved.lit`. This can be verified using the check below.
-#ifndef NDEBUG
-        if (trail_savings() == trail_savings_mode::checked()) {
-            // We create a new solver with trail savings disabled.
-            Solver verifier;
-            verifier.budgetOff();
-            verifier.set_trail_savings(false);
-            // The new solver gets the same CNF as our current solver.
-            clone(verifier);
+        // `saved.lit`. Verify this if we created the `restore_verifier` above.
+        if (restore_verifier) {
+            // Allocate an explicit capacity to avoid an extra reallocation.
+            restore_verifier->assumptions.capacity(trail.size() + 1);
             // The current assignments become assumptions.
-            verifier.assumptions.capacity(trail.size() + 1);
-            trail.copyTo(verifier.assumptions);
-            // As an additional assumption we add the negation of what we claim is
-            // implied.
-            verifier.assumptions.push(~saved.lit);
+            trail.copyTo(restore_verifier->assumptions);
+            // As an additional assumption we add the negation of what we claim is implied.
+            restore_verifier->assumptions.push(~saved.lit);
             // The result should be UNSAT. Otherwise the implication is not correct.
-            assert(verifier.solve_() == l_False && "incorrect implication");
+            assert(restore_verifier->solve_() == l_False && "incorrect implication");
         }
-#endif
 
         //printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
         uncheckedEnqueue(saved.lit, saved.reason);
@@ -985,7 +1002,7 @@ lbool Solver::search(int nof_conflicts)
             return l_False;
 
         if (decisionLevel() == 0) {
-            if (!enqueueAssumps())
+            if (!enqueueAssumps() || !restoreTrail())
                 return l_False;
             else
                 continue;
@@ -1065,10 +1082,10 @@ lbool Solver::solve_()
     solves++;
 
     const char *replay_dir = opt_replay_dir;
-    if (replay_dir != nullptr && replay_dir[0] != '\0') {
+    if (replay_dir != nullptr) {
         replay_base_path = (
             std::ostringstream{}
-                << opt_replay_dir << "/solve"
+                << (opt_replay_dir[0] == '\0' ? "." : opt_replay_dir) << "/solve"
                 << std::setw(5) << std::setfill('0') << Global_solve_counter++).str();
 
         auto base_len = replay_base_path.size();
