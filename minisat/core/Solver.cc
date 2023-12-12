@@ -64,7 +64,8 @@ static BoolOption    opt_rnd_init_act      (_cat, "rnd-init",    "Randomize the 
 static BoolOption    opt_luby_restart      (_cat, "luby",        "Use the Luby restart sequence", true);
 static BoolOption    opt_trail_savings     (_cat, "save-trail",  "Save & restore the trail on level 1 when backtracking to level 0", true);
 #ifndef NDEBUG // verification is meaningless in NDEBUG builds
-static BoolOption    opt_trail_savings_chk (_cat, "verify-trail","Verify restored trail components using a nested solver", false);
+static BoolOption    opt_trail_savings_chk (_cat, "verify-trail",  "Verify restored trail components using a nested solver", false);
+static BoolOption    opt_verify_solves     (_cat, "verify-solves", "Verify all solves with a saved trail against a solve without a saved trail", false);
 #endif
 static IntOption     opt_restart_first     (_cat, "rfirst",      "The base restart interval", 100, IntRange(1, INT32_MAX));
 static DoubleOption  opt_restart_inc       (_cat, "rinc",        "Restart interval increase factor", 2, DoubleRange(1, false, HUGE_VAL, false));
@@ -1002,10 +1003,11 @@ lbool Solver::search(int nof_conflicts)
             return l_False;
 
         if (decisionLevel() == 0) {
-            if (!enqueueAssumps() || !restoreTrail())
+            if (!enqueueAssumps())
                 return l_False;
-            else
-                continue;
+            if (trail_savings() && !restoreTrail())
+                return l_False;
+            continue;
         }
 
         if (learnts.size() - nAssigns() >= max_learnts)
@@ -1080,6 +1082,14 @@ lbool Solver::solve_()
     if (!ok) return l_False;
 
     solves++;
+
+    lbool first_result = l_Undef;
+    if (opt_verify_solves && trail_savings() && saved_trail.size() > 0) {
+        auto mode = trail_savings();
+        set_trail_savings(false, /*clear=*/false);
+        first_result = solve_();
+        set_trail_savings(mode);
+    }
 
     const char *replay_dir = opt_replay_dir;
     if (replay_dir != nullptr) {
@@ -1173,6 +1183,7 @@ lbool Solver::solve_()
         }
     }
 
+    assert(first_result == l_Undef || first_result == status && "mismatched results");
     assert((status != l_False || std::all_of(conflict.toVec().begin(), conflict.toVec().end(), [this](Lit c) {
         return std::find(assumptions.begin(), assumptions.end(), ~c) != assumptions.end();
     })) && "incorrect conflict");

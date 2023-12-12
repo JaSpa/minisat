@@ -188,9 +188,9 @@ private:
 
 public:
     trail_savings_mode trail_savings() const { return trail_savings_; }
-    void set_trail_savings(trail_savings_mode v, bool deallocate = true) {
+    void set_trail_savings(trail_savings_mode v, bool clear = true) {
         trail_savings_ = v;
-        if (!v) saved_trail.clear(deallocate);
+        if (!v && clear) saved_trail.clear(true);
     }
 
 protected:
