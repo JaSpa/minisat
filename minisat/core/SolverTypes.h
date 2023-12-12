@@ -115,6 +115,8 @@ public:
         uint8_t v   = (0xFCFCF400 >> sel) & 3;
         return lbool(v); }
 
+    const char *as_str() const;
+
     friend int   toInt  (lbool l);
     friend lbool toLbool(int   v);
 };
@@ -130,6 +132,14 @@ inline lbool toLbool(int   v) { return lbool((uint8_t)v);  }
   const lbool l_False((uint8_t)1);
   const lbool l_Undef((uint8_t)2);
 #endif
+
+inline const char *lbool::as_str() const {
+    if (*this == l_True)
+        return "TRUE";
+    if (*this == l_False)
+        return "FALSE";
+    return "UNDEF";
+}
 
 
 //=================================================================================================

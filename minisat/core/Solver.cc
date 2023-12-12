@@ -1194,8 +1194,15 @@ lbool Solver::solve_()
         assert(ok);
     }
 
-    assert(first_result == l_Undef || first_result == status && "mismatched results (1)");
-    assert(last_result == l_Undef || last_result == status && "mismatched results (2)");
+
+    if (first_result != l_Undef && first_result != status) {
+        fprintf(stderr, "first: %s\nstatus: %s\n", first_result.as_str(), status.as_str());
+        assert(false);
+    }
+    if (last_result != l_Undef && last_result != status) {
+        fprintf(stderr, "status: %s\nlast: %s\n", status.as_str(), last_result.as_str());
+        assert(false);
+    }
     assert((status != l_False || std::all_of(conflict.toVec().begin(), conflict.toVec().end(), [this](Lit c) {
         return std::find(assumptions.begin(), assumptions.end(), ~c) != assumptions.end();
     })) && "incorrect conflict");
