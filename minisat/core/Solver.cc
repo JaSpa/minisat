@@ -1088,14 +1088,17 @@ lbool Solver::solve_()
     std::string replay_base_path;
     const char *replay_dir = opt_replay_dir;
 
-    lbool first_result = l_Undef;
+
+    lbool first_result=l_Undef;
     if (opt_verify_solves && trail_savings() && saved_trail.size() > 0) {
         opt_replay_dir = nullptr;
-        auto mode = trail_savings();
-        set_trail_savings(false, /*clear=*/false);
-        first_result = solve_();
-        set_trail_savings(mode);
-        assert(ok);
+
+        Solver v;
+        clone(v);
+        v.budgetOff();
+        v.set_trail_savings(false);
+        first_result = v.solve(assumptions) ? l_True : l_False;
+
         opt_replay_dir = replay_dir;
     }
 
@@ -1193,11 +1196,13 @@ lbool Solver::solve_()
     lbool last_result=l_Undef;
     if (opt_verify_solves2 && trail_savings() && saved_trail.size() > 0) {
         opt_replay_dir = nullptr;
-        auto mode = trail_savings();
-        set_trail_savings(false, /*clear=*/false);
-        last_result = solve_();
-        set_trail_savings(mode);
-        assert(ok);
+
+        Solver v;
+        clone(v);
+        v.budgetOff();
+        v.set_trail_savings(false);
+        last_result = v.solve(assumptions) ? l_True : l_False;
+
         opt_replay_dir = replay_dir;
     }
 
