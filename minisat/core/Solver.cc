@@ -66,6 +66,7 @@ static BoolOption    opt_trail_savings     (_cat, "save-trail",  "Save & restore
 #ifndef NDEBUG // verification is meaningless in NDEBUG builds
 static BoolOption    opt_trail_savings_chk (_cat, "verify-trail",  "Verify restored trail components using a nested solver", false);
 static BoolOption    opt_verify_solves     (_cat, "verify-solves", "Verify all solves with a saved trail against a solve without a saved trail", false);
+static BoolOption    opt_verify_solves2    (_cat, "verify-solves2", "Verify all solves with a saved trail against a solve without a saved trail", false);
 #endif
 static IntOption     opt_restart_first     (_cat, "rfirst",      "The base restart interval", 100, IntRange(1, INT32_MAX));
 static DoubleOption  opt_restart_inc       (_cat, "rinc",        "Restart interval increase factor", 2, DoubleRange(1, false, HUGE_VAL, false));
@@ -1089,6 +1090,7 @@ lbool Solver::solve_()
         set_trail_savings(false, /*clear=*/false);
         first_result = solve_();
         set_trail_savings(mode);
+        assert(ok);
     }
 
     const char *replay_dir = opt_replay_dir;
@@ -1183,7 +1185,17 @@ lbool Solver::solve_()
         }
     }
 
-    assert(first_result == l_Undef || first_result == status && "mismatched results");
+    lbool last_result=l_Undef;
+    if (opt_verify_solves2 && trail_savings() && saved_trail.size() > 0) {
+        auto mode = trail_savings();
+        set_trail_savings(false, /*clear=*/false);
+        last_result = solve_();
+        set_trail_savings(mode);
+        assert(ok);
+    }
+
+    assert(first_result == l_Undef || first_result == status && "mismatched results (1)");
+    assert(last_result == l_Undef || last_result == status && "mismatched results (2)");
     assert((status != l_False || std::all_of(conflict.toVec().begin(), conflict.toVec().end(), [this](Lit c) {
         return std::find(assumptions.begin(), assumptions.end(), ~c) != assumptions.end();
     })) && "incorrect conflict");
