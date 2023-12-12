@@ -944,6 +944,8 @@ bool Solver::restoreTrail()
         // At this point we claim that the current assignment implies
         // `saved.lit`. Verify this if we created the `restore_verifier` above.
         if (restore_verifier) {
+            const char *replay_dir = opt_replay_dir;
+            opt_replay_dir = nullptr;
             // Allocate an explicit capacity to avoid an extra reallocation.
             restore_verifier->assumptions.capacity(trail.size() + 1);
             // The current assignments become assumptions.
@@ -952,6 +954,7 @@ bool Solver::restoreTrail()
             restore_verifier->assumptions.push(~saved.lit);
             // The result should be UNSAT. Otherwise the implication is not correct.
             assert(restore_verifier->solve_() == l_False && "incorrect implication");
+            opt_replay_dir = replay_dir;
         }
 
         //printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
@@ -1075,25 +1078,27 @@ static double luby(double y, int x){
 // NOTE: assumptions passed in member-variable 'assumptions'.
 lbool Solver::solve_()
 {
-    static std::atomic_uint Global_solve_counter;
-    std::string replay_base_path;
-
     model.clear();
     conflict.clear();
     if (!ok) return l_False;
 
     solves++;
 
+    static std::atomic_uint Global_solve_counter;
+    std::string replay_base_path;
+    const char *replay_dir = opt_replay_dir;
+
     lbool first_result = l_Undef;
     if (opt_verify_solves && trail_savings() && saved_trail.size() > 0) {
+        opt_replay_dir = nullptr;
         auto mode = trail_savings();
         set_trail_savings(false, /*clear=*/false);
         first_result = solve_();
         set_trail_savings(mode);
         assert(ok);
+        opt_replay_dir = replay_dir;
     }
 
-    const char *replay_dir = opt_replay_dir;
     if (replay_dir != nullptr) {
         replay_base_path = (
             std::ostringstream{}
@@ -1187,11 +1192,13 @@ lbool Solver::solve_()
 
     lbool last_result=l_Undef;
     if (opt_verify_solves2 && trail_savings() && saved_trail.size() > 0) {
+        opt_replay_dir = nullptr;
         auto mode = trail_savings();
         set_trail_savings(false, /*clear=*/false);
         last_result = solve_();
         set_trail_savings(mode);
         assert(ok);
+        opt_replay_dir = replay_dir;
     }
 
 
