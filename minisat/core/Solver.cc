@@ -29,6 +29,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -44,6 +45,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "minisat/core/SolverTypes.h"
 #include "minisat/mtl/Alg.h"
 #include "minisat/mtl/Sort.h"
+#include "minisat/utils/Assert.h"
 #include "minisat/utils/Options.h"
 #include "minisat/utils/System.h"
 
@@ -153,10 +155,6 @@ void Solver::clone(Solver &s) const
 
     // Copy all clauses.
     for (ClauseIterator it = clausesBegin(); it != clausesEnd(); ++it) {
-        // Skip removed clauses.
-        if (isRemoved(it.ref()))
-            continue;
-
         int size = it->size();
         s.add_tmp.clear();
         s.add_tmp.capacity(size);
@@ -925,12 +923,12 @@ bool Solver::restoreTrail()
         // `false`.
         int lit_idx = 0;
         while (++lit_idx < reason.size() && value(reason[lit_idx]) == l_False) {
-          // Empty loop body.
+            // Empty loop body.
         }
 
         // If we did not reach the end we skip this saved literal.
         if (lit_idx < reason.size()) {
-          continue;
+            continue;
         }
 
         // All literals in the reason clause have been assigned `false`. We have
@@ -943,20 +941,40 @@ bool Solver::restoreTrail()
         // At this point we claim that the current assignment implies
         // `saved.lit`. Verify this if we created the `restore_verifier` above.
         if (restore_verifier) {
-            const char *replay_dir = opt_replay_dir;
-            opt_replay_dir = nullptr;
-            // Allocate an explicit capacity to avoid an extra reallocation.
+            // Allocate an explicit capacity to avoid any extra reallocation.
             restore_verifier->assumptions.capacity(trail.size() + 1);
-            // The current assignments become assumptions.
-            trail.copyTo(restore_verifier->assumptions);
+            // Copy the assumptions. (Clears any previous contents.)
+            assumptions.copyTo(restore_verifier->assumptions);
             // As an additional assumption we add the negation of what we claim is implied.
             restore_verifier->assumptions.push(~saved.lit);
-            // The result should be UNSAT. Otherwise the implication is not correct.
-            assert(restore_verifier->solve_() == l_False && "incorrect implication");
+
+            // Disable replay writing during the verification solve.
+            const char *replay_dir = opt_replay_dir;
+            opt_replay_dir = nullptr;
+
+            // Use the private `solve_` interface because we have written the assumptions directly.
+            lbool result = restore_verifier->solve_();
+            if (result != l_False) {
+                fprintf(stderr, "verification result: %s (should be UNSAT!)\n", result.as_str());
+
+                // Retry with level 0.
+                int assump_sz = restore_verifier->assumptions.size();
+                restore_verifier->assumptions.growTo(assump_sz + trail_lim[0]);
+                std::copy(trail.begin(), trail.begin() + trail_lim[0],
+                          static_cast<Lit *>(restore_verifier->assumptions) + assump_sz);
+                fprintf(stderr, "re-using level 0: %s\n", restore_verifier->solve_().as_str());
+
+                // Retry with the full trail.
+                trail.copyTo(restore_verifier->assumptions);
+                fprintf(stderr, "re-using the full trail: %s\n", restore_verifier->solve_().as_str());
+
+                assert(false);
+            }
+
             opt_replay_dir = replay_dir;
         }
 
-        //printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
+        // printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
         uncheckedEnqueue(saved.lit, saved.reason);
     }
 
@@ -1192,10 +1210,7 @@ lbool Solver::solve_()
         }
     }
 
-    if (first_result != l_Undef && first_result != status) {
-        fprintf(stderr, "first: %s\nstatus: %s\n", first_result.as_str(), status.as_str());
-        assert(false);
-    }
+    MINISAT_ASSERT(first_result == l_Undef || status == first_result, "trail savings OFF: %s\ntrail savings ON:  %s", first_result.as_str(), status.as_str());
     assert((status != l_False || std::all_of(conflict.toVec().begin(), conflict.toVec().end(), [this](Lit c) {
         return std::find(assumptions.begin(), assumptions.end(), ~c) != assumptions.end();
     })) && "incorrect conflict");
@@ -1366,6 +1381,38 @@ void Solver::toDimacs(std::ostream& os, const vec<Lit>& assumps) const
 
     if (verbosity > 0)
         printf("Wrote DIMACS with %d variables and %d clauses.\n", max, cnt);
+}
+
+
+void Solver::toDimacsBare(std::ostream &os) const
+{
+    MINISAT_ASSERT(nClauses() == clauses.size(),
+            "mismatched clause count: nClauses() = %d, clauses.size() = %d",
+            nClauses(),
+            clauses.size());
+
+    os << "p cnf " << nVars() << ' ' << nClauses() << "\n";
+
+    auto section_header = [&os](int n, const char *header) -> std::ostream& {
+        return os << "\nc " << n << ' ' << header << (n == 1 ? "" : "s") << '\n';
+    };
+    auto dimacs_lit = [&os](Lit l) -> std::ostream& {
+        return os << (sign(l) ? "-" : "") << var(l) + 1;
+    };
+
+    section_header(assumptions.size(), "assumption");
+    for (Lit l : assumptions) {
+        dimacs_lit(l) << " 0\n";
+    }
+
+    section_header(nClauses(), "clause");
+    for (CRef ref : clauses)  {
+        const Clause &c = ca[ref];
+        for (int i = 0; i < c.size(); ++i) {
+            dimacs_lit(c[i]) << ' ';
+        }
+        os << "0\n";
+    }
 }
 
 

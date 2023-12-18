@@ -109,6 +109,7 @@ public:
 
     void    toDimacs     (std::ostream& os, const vec<Lit>& assumps) const;
     void    toDimacs     (std::ostream& os, const Clause& c, vec<Var>& map, Var& max) const;
+    void    toDimacsBare (std::ostream& os) const;
 
     // Convenience versions of 'toDimacs()':
     void    toDimacs     (const char* file);
