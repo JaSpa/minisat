@@ -1244,7 +1244,7 @@ lbool Solver::solve_()
                 vec<Lit> neg_conflict;
                 conflict.toVec().copyTo(neg_conflict);
 
-                if (!toDimacsGz(replay_base_path.c_str(), neg_conflict))
+                if (!toDimacsGz(replay_base_path.c_str(), neg_conflict, /*version=*/2))
                     opt_replay_dir = nullptr;
             }
         } catch (const std::exception &exc) {
@@ -1314,8 +1314,9 @@ static Var mapVar(Var x, vec<Var>& map, Var& max)
     return map[x];
 }
 
-bool Solver::toDimacsGz(const char *file, const vec<Lit>& assumps, bool bare) const
+bool Solver::toDimacsGz(const char *file, const vec<Lit> &assumps, uint8_t version) const
 {
+    assert(1 <= version && version <= 2 && "invalid toDimacs version");
     namespace io = boost::iostreams;
 
     try {
@@ -1331,10 +1332,13 @@ bool Solver::toDimacsGz(const char *file, const vec<Lit>& assumps, bool bare) co
         cnf_buf.push(cnf_sink);
 
         std::ostream cnf(&cnf_buf);
-        if (bare) {
-          toDimacsBare(cnf, assumps);
-        } else {
-          toDimacs(cnf, assumps);
+        switch (version) {
+        case 1:
+            toDimacs(cnf, assumps);
+            break;
+        case 2:
+            toDimacs2(cnf, assumps);
+            break;
         }
         if (!cnf.flush()) {
             fprintf(stderr, "failed to write replay CNF file %s (%s)\n", file, strerror(errno));
@@ -1435,14 +1439,13 @@ void Solver::toDimacs(std::ostream& os, const vec<Lit>& assumps) const
 }
 
 
-void Solver::toDimacsBare(std::ostream &os, const vec<Lit> &assumps) const
+void Solver::toDimacs2(std::ostream &os, const vec<Lit> &assumps) const
 {
-    MINISAT_ASSERT(nClauses() == clauses.size(),
-            "mismatched clause count: nClauses() = %d, clauses.size() = %d",
-            nClauses(),
-            clauses.size());
+    int assumps_cnt = assumps.size();
+    int level0_cnt = trail_lim.size() > 0 ? trail_lim[0] : trail.size();
+    int clause_cnt = clauses.size();
 
-    os << "p cnf " << nVars() << ' ' << nClauses() << "\n";
+    os << "p cnf " << nVars() << ' ' << (assumps_cnt + level0_cnt + clause_cnt) << "\n\n";
 
     auto section_header = [&os](int n, const char *header) -> std::ostream& {
         return os << "\nc " << n << ' ' << header << (n == 1 ? "" : "s") << '\n';
@@ -1451,18 +1454,17 @@ void Solver::toDimacsBare(std::ostream &os, const vec<Lit> &assumps) const
         return os << (sign(l) ? "-" : "") << var(l) + 1;
     };
 
-    section_header(assumps.size(), "assumption");
+    section_header(assumps_cnt, "assumption");
     for (Lit l : assumps) {
         dimacs_lit(l) << " 0\n";
     }
 
-    int l0 = trail_lim.size() > 0 ? trail_lim[0] : trail.size();
-    section_header(l0, "level 0");
-    for (int i = 0; i < l0; ++i) {
+    section_header(level0_cnt, "level 0");
+    for (int i = 0; i < level0_cnt; ++i) {
       dimacs_lit(trail[i]) << " 0\n";
     }
 
-    section_header(nClauses(), "clause");
+    section_header(clause_cnt, "clause");
     for (CRef ref : clauses)  {
         const Clause &c = ca[ref];
         for (int i = 0; i < c.size(); ++i) {

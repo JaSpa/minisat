@@ -109,15 +109,20 @@ public:
 
     void    toDimacs     (std::ostream& os, const vec<Lit>& assumps) const;
     void    toDimacs     (std::ostream& os, const Clause& c, vec<Var>& map, Var& max) const;
-    void    toDimacsBare (std::ostream& os, const vec<Lit>& assumps) const;
+
+    // Re-implementation of `toDimacs` without variable compression.
+    void    toDimacs2    (std::ostream& os, const vec<Lit>& assumps) const;
 
     // Convenience versions of 'toDimacs()':
     void    toDimacs     (const char* file);
     void    toDimacs     (const char* file, Lit p);
     void    toDimacs     (const char* file, Lit p, Lit q);
     void    toDimacs     (const char* file, Lit p, Lit q, Lit r);
-    bool    toDimacsGz   (const char* file, const vec<Lit>& assumps, bool bare = false) const;
-    
+
+    // Write DIMACS representation to the given GZ compressed file. `version` specifies if the original
+    // `toDimacs` should be used or the reimplementation `toDimacs2`.
+    bool    toDimacsGz   (const char* file, const vec<Lit>& assumps, uint8_t version = 1) const;
+
     // Variable mode:
     // 
     void    setPolarity    (Var v, lbool b); // Declare which polarity the decision heuristic should use for a variable. Requires mode 'polarity_user'.
