@@ -165,6 +165,11 @@ void Solver::clone(Solver &s) const
         assert(ok && "conflict during clause cloning");
         (void)ok;
     }
+
+    // Copy level 0.
+    for (int i = 0, l0 = trail_lim.size() > 0 ? trail_lim[0] : trail.size(); i < l0; ++i) {
+      s.uncheckedEnqueue(trail[i]);
+    }
 }
 
 //=================================================================================================
@@ -957,15 +962,9 @@ bool Solver::restoreTrail()
             if (result != l_False) {
                 fprintf(stderr, "verification result: %s (should be UNSAT!)\n", result.as_str());
 
-                // Retry with level 0.
-                int assump_sz = restore_verifier->assumptions.size();
-                restore_verifier->assumptions.growTo(assump_sz + trail_lim[0]);
-                std::copy(trail.begin(), trail.begin() + trail_lim[0],
-                          static_cast<Lit *>(restore_verifier->assumptions) + assump_sz);
-                fprintf(stderr, "re-using level 0: %s\n", restore_verifier->solve_().as_str());
-
                 // Retry with the full trail.
                 trail.copyTo(restore_verifier->assumptions);
+                trail.push(~saved.lit);
                 fprintf(stderr, "re-using the full trail: %s\n", restore_verifier->solve_().as_str());
 
                 assert(false);
@@ -1403,6 +1402,12 @@ void Solver::toDimacsBare(std::ostream &os) const
     section_header(assumptions.size(), "assumption");
     for (Lit l : assumptions) {
         dimacs_lit(l) << " 0\n";
+    }
+
+    int l0 = trail_lim.size() > 0 ? trail_lim[0] : trail.size();
+    section_header(l0, "level 0");
+    for (int i = 0; i < l0; ++i) {
+      dimacs_lit(trail[i]) << " 0\n";
     }
 
     section_header(nClauses(), "clause");
