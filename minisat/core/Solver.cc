@@ -74,6 +74,10 @@ static DoubleOption  opt_restart_inc       (_cat, "rinc",        "Restart interv
 static DoubleOption  opt_garbage_frac      (_cat, "gc-frac",     "The fraction of wasted memory allowed before a garbage collection is triggered",  0.20, DoubleRange(0, false, HUGE_VAL, false));
 static IntOption     opt_min_learnts_lim   (_cat, "min-learnts", "Minimum learnt clause limit",  0, IntRange(0, INT32_MAX));
 static StringOption  opt_replay_dir        (_cat, "replay-dir",  "When set, directory where to write replay information");
+static BoolOption    opt_debug_output      (_cat, "debug",       "Show debug output", false);
+static BoolOption    opt_verify_level_0    (_cat, "verify-0",    "Verify any learnings for level 0", false);
+
+#define MINISAT_DBG(fmt, ...) (opt_debug_output ? (void)fprintf(stderr, fmt __VA_OPT__(,) __VA_ARGS__) : (void)(0))
 
 
 //=================================================================================================
@@ -294,6 +298,7 @@ bool Solver::satisfied(const Clause& c) const {
 void Solver::cancelUntil(int level)
 {
     assert(level >= 0 && "invalid backtrack level");
+    MINISAT_DBG("C(%d)", level);
     if (decisionLevel() <= level)
         return;
 
@@ -824,7 +829,36 @@ bool Solver::handleSearchConfl(CRef confl, vec<Lit> &learnt_clause)
     analyze(confl, learnt_clause, backtrack_level);
     cancelUntil(backtrack_level);
 
+
+    MINISAT_DBG("L");
+
     if (learnt_clause.size() == 1) {
+        if (backtrack_level == 0 && opt_verify_level_0) {
+            const char *rpl_dir = opt_replay_dir;
+            bool v_solves = opt_verify_solves;
+            bool dbg_enabled = opt_debug_output;
+
+            opt_replay_dir = nullptr;
+            opt_verify_solves = false;
+            opt_verify_level_0 = false;
+            opt_debug_output = false;
+
+            Solver s;
+            s.set_trail_savings(false);
+            clone(s);
+
+            s.assumptions.capacity(assumptions.size() + 1);
+            assumptions.copyTo(s.assumptions);
+            s.assumptions.push(~learnt_clause[0]);
+
+            auto res = s.solve_();
+            MINISAT_ASSERT(res == l_False, "actual: %s", res.as_str());
+
+            opt_replay_dir = rpl_dir;
+            opt_verify_solves = v_solves;
+            opt_verify_level_0 = true;
+            opt_debug_output = dbg_enabled;
+        }
         uncheckedEnqueue(learnt_clause[0]);
     } else {
         CRef cr = ca.alloc(learnt_clause, true);
@@ -1002,6 +1036,8 @@ lbool Solver::search(int nof_conflicts)
     vec<Lit>    learnt_clause;
     starts++;
 
+    MINISAT_DBG("Z(%d)", trail_lim.size() > 0 ? trail_lim[0] : trail.size());
+
     for (;;) {
         CRef confl = propagate();
         if (confl != CRef_Undef) {
@@ -1119,19 +1155,17 @@ lbool Solver::solve_()
     }
 
     if (replay_dir != nullptr) {
+        unsigned  solve_id = Global_solve_counter++;
+        MINISAT_DBG("<%u>", solve_id);
         replay_base_path = (
             std::ostringstream{}
                 << (opt_replay_dir[0] == '\0' ? "." : opt_replay_dir) << "/solve"
-                << std::setw(5) << std::setfill('0') << Global_solve_counter++).str();
+                << std::setw(5) << std::setfill('0') << solve_id).str();
 
         auto base_len = replay_base_path.size();
-        replay_base_path += ".cnf.gz";
+        replay_base_path += ".p.cnf.gz";
 
-        bool skip_bad_assump = std::any_of(assumptions.begin(), assumptions.end(), [this](Lit a) {
-            return value(a) == l_False;
-        });
-
-        if (!skip_bad_assump && !toDimacsGz(replay_base_path.c_str(), assumptions)) {
+        if (!toDimacsGz(replay_base_path.c_str(), assumptions, /*custom impl*/true)) {
             // Disable further replay writes.
             opt_replay_dir = nullptr;
             // Disable wrting the result.
@@ -1202,6 +1236,16 @@ lbool Solver::solve_()
 
                 file.close();
                 if (!file) throw std::runtime_error(strerror(errno));
+
+                replay_base_path.resize(base_len);
+                write_kind = "conflict problem";
+                replay_base_path += ".c.cnf.gz";
+
+                vec<Lit> neg_conflict;
+                conflict.toVec().copyTo(neg_conflict);
+
+                if (!toDimacsGz(replay_base_path.c_str(), neg_conflict))
+                    opt_replay_dir = nullptr;
             }
         } catch (const std::exception &exc) {
             fprintf(stderr, "failed to write %s to %s (%s)", write_kind, replay_base_path.c_str(), exc.what());
@@ -1209,10 +1253,14 @@ lbool Solver::solve_()
         }
     }
 
-    MINISAT_ASSERT(first_result == l_Undef || status == first_result, "trail savings OFF: %s\ntrail savings ON:  %s", first_result.as_str(), status.as_str());
-    assert((status != l_False || std::all_of(conflict.toVec().begin(), conflict.toVec().end(), [this](Lit c) {
-        return std::find(assumptions.begin(), assumptions.end(), ~c) != assumptions.end();
-    })) && "incorrect conflict");
+    MINISAT_ASSERT(first_result == l_Undef || status == first_result,
+                   "trail savings OFF: %s\ntrail savings ON:  %s", first_result.as_str(), status.as_str());
+    assert((status != l_False || std::all_of(conflict.toVec().begin(), conflict.toVec().end(),
+                                             [this](Lit c) {
+                                                 return std::find(assumptions.begin(), assumptions.end(),
+                                                                  ~c) != assumptions.end();
+                                             })) &&
+           "incorrect conflict");
 
     if (status == l_True){
         // Extend & copy model:
@@ -1266,7 +1314,7 @@ static Var mapVar(Var x, vec<Var>& map, Var& max)
     return map[x];
 }
 
-bool Solver::toDimacsGz(const char *file, const vec<Lit>& assumps) const
+bool Solver::toDimacsGz(const char *file, const vec<Lit>& assumps, bool bare) const
 {
     namespace io = boost::iostreams;
 
@@ -1283,7 +1331,11 @@ bool Solver::toDimacsGz(const char *file, const vec<Lit>& assumps) const
         cnf_buf.push(cnf_sink);
 
         std::ostream cnf(&cnf_buf);
-        toDimacs(cnf, assumps);
+        if (bare) {
+          toDimacsBare(cnf, assumps);
+        } else {
+          toDimacs(cnf, assumps);
+        }
         if (!cnf.flush()) {
             fprintf(stderr, "failed to write replay CNF file %s (%s)\n", file, strerror(errno));
             return false;
@@ -1383,7 +1435,7 @@ void Solver::toDimacs(std::ostream& os, const vec<Lit>& assumps) const
 }
 
 
-void Solver::toDimacsBare(std::ostream &os) const
+void Solver::toDimacsBare(std::ostream &os, const vec<Lit> &assumps) const
 {
     MINISAT_ASSERT(nClauses() == clauses.size(),
             "mismatched clause count: nClauses() = %d, clauses.size() = %d",
@@ -1399,8 +1451,8 @@ void Solver::toDimacsBare(std::ostream &os) const
         return os << (sign(l) ? "-" : "") << var(l) + 1;
     };
 
-    section_header(assumptions.size(), "assumption");
-    for (Lit l : assumptions) {
+    section_header(assumps.size(), "assumption");
+    for (Lit l : assumps) {
         dimacs_lit(l) << " 0\n";
     }
 

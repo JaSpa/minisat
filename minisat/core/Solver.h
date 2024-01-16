@@ -109,14 +109,14 @@ public:
 
     void    toDimacs     (std::ostream& os, const vec<Lit>& assumps) const;
     void    toDimacs     (std::ostream& os, const Clause& c, vec<Var>& map, Var& max) const;
-    void    toDimacsBare (std::ostream& os) const;
+    void    toDimacsBare (std::ostream& os, const vec<Lit>& assumps) const;
 
     // Convenience versions of 'toDimacs()':
     void    toDimacs     (const char* file);
     void    toDimacs     (const char* file, Lit p);
     void    toDimacs     (const char* file, Lit p, Lit q);
     void    toDimacs     (const char* file, Lit p, Lit q, Lit r);
-    bool    toDimacsGz   (const char* file, const vec<Lit>& assumps) const;
+    bool    toDimacsGz   (const char* file, const vec<Lit>& assumps, bool bare = false) const;
     
     // Variable mode:
     // 
