@@ -1239,7 +1239,10 @@ lbool Solver::solve_()
                 replay_base_path += ".c.cnf.gz";
 
                 vec<Lit> neg_conflict;
-                conflict.toVec().copyTo(neg_conflict);
+                neg_conflict.capacity(conflict.size());
+                for (Lit l : conflict.toVec()) {
+                    neg_conflict.push(~l);
+                }
 
                 if (!toDimacsGz(replay_base_path.c_str(), neg_conflict, /*version=*/2))
                     opt_replay_dir = nullptr;
