@@ -77,6 +77,16 @@ static StringOption  opt_replay_dir        (_cat, "replay-dir",  "When set, dire
 static BoolOption    opt_debug_output      (_cat, "debug",       "Show debug output", false);
 static BoolOption    opt_verify_level_0    (_cat, "verify-0",    "Verify any learnings for level 0", false);
 
+template <class T>
+class LocalReset final {
+    T previous;
+    T &target;
+
+ public:
+    LocalReset(T &target, T value) : target(target), previous(value) { std::swap(target, previous); }
+    ~LocalReset() { std::swap(target, previous); }
+};
+
 #define MINISAT_DBG(fmt, ...) (opt_debug_output ? (void)fprintf(stderr, fmt __VA_OPT__(,) __VA_ARGS__) : (void)(0))
 
 
@@ -834,14 +844,10 @@ bool Solver::handleSearchConfl(CRef confl, vec<Lit> &learnt_clause)
 
     if (learnt_clause.size() == 1) {
         if (backtrack_level == 0 && opt_verify_level_0) {
-            const char *rpl_dir = opt_replay_dir;
-            bool v_solves = opt_verify_solves;
-            bool dbg_enabled = opt_debug_output;
-
-            opt_replay_dir = nullptr;
-            opt_verify_solves = false;
-            opt_verify_level_0 = false;
-            opt_debug_output = false;
+            LocalReset<const char *> disable_replays{opt_replay_dir, nullptr};
+            LocalReset<bool> disable_verify{opt_verify_solves, false};
+            LocalReset<bool> disable_verify0{opt_verify_level_0, false};
+            LocalReset<bool> disable_debug{opt_debug_output, false};
 
             Solver s;
             s.set_trail_savings(false);
@@ -853,11 +859,6 @@ bool Solver::handleSearchConfl(CRef confl, vec<Lit> &learnt_clause)
 
             auto res = s.solve_();
             MINISAT_ASSERT(res == l_False, "actual: %s", res.as_str());
-
-            opt_replay_dir = rpl_dir;
-            opt_verify_solves = v_solves;
-            opt_verify_level_0 = true;
-            opt_debug_output = dbg_enabled;
         }
         uncheckedEnqueue(learnt_clause[0]);
     } else {
@@ -988,8 +989,9 @@ bool Solver::restoreTrail()
             restore_verifier->assumptions.push(~saved.lit);
 
             // Disable replay writing during the verification solve.
-            const char *replay_dir = opt_replay_dir;
-            opt_replay_dir = nullptr;
+            LocalReset<const char *> disable_replays{opt_replay_dir, nullptr};
+            LocalReset<bool> disable_verify{opt_verify_solves, false};
+            LocalReset<bool> disable_verify0{opt_verify_level_0, false};
 
             // Use the private `solve_` interface because we have written the assumptions directly.
             lbool result = restore_verifier->solve_();
@@ -1003,8 +1005,6 @@ bool Solver::restoreTrail()
 
                 assert(false);
             }
-
-            opt_replay_dir = replay_dir;
         }
 
         // printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));
@@ -1138,23 +1138,19 @@ lbool Solver::solve_()
 
     static std::atomic_uint Global_solve_counter;
     std::string replay_base_path;
-    const char *replay_dir = opt_replay_dir;
 
-
-    lbool first_result=l_Undef;
+    lbool first_result = l_Undef;
     if (opt_verify_solves && trail_savings() && saved_trail.size() > 0) {
-        opt_replay_dir = nullptr;
+        LocalReset<const char *> disable_replays{opt_replay_dir, nullptr};
 
         Solver v;
         clone(v);
         v.budgetOff();
         v.set_trail_savings(false);
         first_result = v.solve(assumptions) ? l_True : l_False;
-
-        opt_replay_dir = replay_dir;
     }
 
-    if (replay_dir != nullptr) {
+    if (static_cast<const char *>(opt_replay_dir) != nullptr) {
         unsigned  solve_id = Global_solve_counter++;
         MINISAT_DBG("<%u>", solve_id);
         replay_base_path = (
