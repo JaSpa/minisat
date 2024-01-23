@@ -791,20 +791,21 @@ bool Solver::simplify()
 
         // TODO: what todo in if 'remove_satisfied' is false?
 
-        // Remove all released variables from the trail:
-        for (int i = 0; i < released_vars.size(); i++){
+        // Collect all released variables into a set.
+        for (int i = 0; i < released_vars.size(); i++) {
             assert(seen[released_vars[i]] == 0);
             seen[released_vars[i]] = 1;
         }
 
-        int i, j;
-        for (i = j = 0; i < trail.size(); i++)
-            if (seen[var(trail[i])] == 0)
-                trail[j++] = trail[i];
-        trail.shrink(i - j);
-        //printf("trail.size()= %d, qhead = %d\n", trail.size(), qhead);
+        // Remove all released variables from the trail:
+        trail.retain([this](Lit l) { return seen[var(l)] == 0; });
+        // printf("trail.size()= %d, qhead = %d\n", trail.size(), qhead);
         qhead = trail.size();
 
+        // Remove all released variables from the saved trail.
+        saved_trail.retain([this](SavedLit saved) { return seen[var(saved.lit)] == 0; });
+
+        // Clear out the `seen` set for use elsewhere.
         for (int i = 0; i < released_vars.size(); i++)
             seen[released_vars[i]] = 0;
 

@@ -24,6 +24,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <assert.h>
 #include <limits>
 #include <new>
+#include <utility>
 
 #include "minisat/mtl/IntTypes.h"
 #include "minisat/mtl/XAlloc.h"
@@ -88,6 +89,11 @@ public:
     void     growTo   (Size size);
     void     growTo   (Size size, const T& pad);
     void     clear    (bool dealloc = false);
+
+    // Filter the vector to those elements where `pred` returns a value which when converted to a boolean
+    // evaluates to `true`.
+    template <class UnaryFn>
+    void retain(UnaryFn &&pred);
 
     // Stack interface:
     //
@@ -173,6 +179,20 @@ void vec<T,_Size>::clear(bool dealloc) {
         sz = 0;
         if (dealloc) free(data), data = NULL, cap = 0;
     }
+}
+
+template <class T, class _Size>
+template <class UnaryFn>
+void vec<T, _Size>::retain(UnaryFn &&pred)
+{
+    _Size i, j;
+    for (i = j = 0; i < size(); ++i) {
+        T &value = (*this)[i];
+        if (pred(value)) {
+            (*this)[j++] = value;
+        }
+    }
+    shrink(i - j);
 }
 
 //=================================================================================================
