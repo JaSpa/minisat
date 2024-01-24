@@ -289,9 +289,18 @@ void Solver::detachClause(CRef cr, bool strict){
 void Solver::removeClause(CRef cr) {
     Clause& c = ca[cr];
     detachClause(cr);
+
     // Don't leave pointers to free'd memory!
-    if (locked(c)) vardata[var(c[0])].reason = CRef_Undef;
-    c.mark(1); 
+    if (locked(c)) {
+        vardata[var(c[0])].reason = CRef_Undef;
+    }
+    for (int i = 0; i < saved_trail.size(); ++i) {
+        if (saved_trail[i].reason == cr) {
+            saved_trail[i].reason = CRef_Undef;
+        }
+    }
+
+    c.mark(1);
     ca.free(cr);
 }
 
@@ -936,7 +945,12 @@ bool Solver::restoreTrail()
     // will be empty.
     for (SavedLit saved : saved_trail) {
         // Check that the saved literal's reason did not change.
-        if (saved.reason != reason(var(saved.lit))) {
+        if (saved.reason == CRef_Undef || saved.reason != reason(var(saved.lit))) {
+            continue;
+        }
+
+        // Nothing to do if the literal is already satisfied.
+        if (value(saved.lit) == l_True) {
             continue;
         }
 
@@ -944,11 +958,6 @@ bool Solver::restoreTrail()
         // reason clause.
         const Clause &reason = ca[saved.reason];
         if (reason[0] != saved.lit) {
-            continue;
-        }
-
-        // Nothing to do if the literal is already satisfied.
-        if (value(saved.lit) == l_True) {
             continue;
         }
 
@@ -1055,11 +1064,9 @@ lbool Solver::search(int nof_conflicts)
             return l_Undef;
         }
 
-        // Simplify the set of problem clauses:
-        if (decisionLevel() == 0 && !simplify())
-            return l_False;
-
         if (decisionLevel() == 0) {
+            if (!simplify())
+                return l_False;
             if (!enqueueAssumps())
                 return l_False;
             if (trail_savings() && !restoreTrail())
@@ -1540,7 +1547,7 @@ void Solver::relocAll(ClauseAllocator& to)
     // All saved literals:
     //
     for (i = j = 0; i < saved_trail.size(); i++) {
-      if (!isRemoved(saved_trail[i].reason)) {
+      if (saved_trail[i].reason != CRef_Undef) {
         ca.reloc(saved_trail[i].reason, to);
         saved_trail[j++] = saved_trail[i];
       }
