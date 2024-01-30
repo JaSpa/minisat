@@ -44,10 +44,6 @@ public:
     Solver();
     virtual ~Solver();
 
-    // Copies this solver's CNF to `other`. `other` has to be empty (no clauses,
-    // no variables).
-    void clone(Solver &other) const;
-
     // Problem specification:
     //
     Var     newVar    (lbool upol = l_Undef, bool dvar = true); // Add a new variable with parameters specifying variable mode.

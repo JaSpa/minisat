@@ -137,34 +137,6 @@ Solver::~Solver()
 {
 }
 
-void Solver::clone(Solver &s) const
-{
-    assert(s.okay() && s.nClauses() == 0 && s.nVars() == 0 &&
-           "cloning to a non-empty solver");
-
-    // Create variables.
-    while (s.nVars() < nVars()) {
-        s.newVar();
-    }
-
-    // Copy all clauses.
-    for (ClauseIterator it = clausesBegin(); it != clausesEnd(); ++it) {
-        int size = it->size();
-        s.add_tmp.clear();
-        s.add_tmp.capacity(size);
-        for (int i = 0; i < size; ++i)
-            s.add_tmp.push((*it)[i]);
-
-        bool ok = s.addClause_(s.add_tmp);
-        assert(ok && "conflict during clause cloning");
-        (void)ok;
-    }
-
-    // Copy level 0.
-    for (int i = 0, l0 = trail_lim.size() > 0 ? trail_lim[0] : trail.size(); i < l0; ++i) {
-      s.uncheckedEnqueue(trail[i]);
-    }
-}
 
 //=================================================================================================
 // Minor methods:
