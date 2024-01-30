@@ -45,7 +45,6 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "minisat/core/SolverTypes.h"
 #include "minisat/mtl/Alg.h"
 #include "minisat/mtl/Sort.h"
-#include "minisat/utils/Assert.h"
 #include "minisat/utils/Options.h"
 #include "minisat/utils/System.h"
 

@@ -59,8 +59,8 @@ SOMAJOR=2
 SOMINOR=1
 SORELEASE?=.0#   Declare empty to leave out from library file name.
 
-MINISAT_CXXFLAGS = -std=c++20 -I. -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS -Wall -Wno-parentheses -Wextra
-MINISAT_LDFLAGS  = -std=c++20 -Wall -lz
+MINISAT_CXXFLAGS = -std=c++14 -I. -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS -Wall -Wno-parentheses -Wextra
+MINISAT_LDFLAGS  = -std=c++14 -Wall -lz
 
 ECHO=@echo
 ifeq ($(VERB),)

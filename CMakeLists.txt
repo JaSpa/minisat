@@ -46,7 +46,7 @@ include (GenerateExportHeader)
 #--------------------------------------------------------------------------------------------------
 # Compile flags:
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 14)
 add_definitions(-D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS)
 
 #--------------------------------------------------------------------------------------------------
@@ -199,7 +199,6 @@ add_custom_target(uninstall
 # Build Targets:
 
 set(MINISAT_LIB_SOURCES
-    minisat/utils/Assert.cc
     minisat/utils/Options.cc
     minisat/utils/System.cc
     minisat/core/Info.cc
