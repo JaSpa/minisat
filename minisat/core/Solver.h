@@ -103,14 +103,17 @@ public:
     TrailIterator  trailBegin()   const;
     TrailIterator  trailEnd  ()   const;
 
-    void    toDimacs     (FILE* f, const vec<Lit>& assumps);            // Write CNF to file in DIMACS-format.
     void    toDimacs     (const char *file, const vec<Lit>& assumps);
+
+    // `FILE*` versions require BOOST.
+    void    toDimacs     (FILE* f, const vec<Lit>& assumps);
     void    toDimacs     (FILE* f, Clause& c, vec<Var>& map, Var& max);
 
     void    toDimacs     (std::ostream& os, const vec<Lit>& assumps) const;
     void    toDimacs     (std::ostream& os, const Clause& c, vec<Var>& map, Var& max) const;
 
     // Re-implementation of `toDimacs` without variable compression.
+    bool    toDimacs2    (const char *file, const vec<Lit>& assumps) const;
     void    toDimacs2    (std::ostream& os, const vec<Lit>& assumps) const;
 
     // Convenience versions of 'toDimacs()':
@@ -121,6 +124,8 @@ public:
 
     // Write DIMACS representation to the given GZ compressed file. `version` specifies if the original
     // `toDimacs` should be used or the reimplementation `toDimacs2`.
+    //
+    // Only available when compiled with BOOST.
     bool    toDimacsGz   (const char* file, const vec<Lit>& assumps, uint8_t version = 1) const;
 
     // Variable mode:

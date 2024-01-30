@@ -34,12 +34,15 @@ SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 # Dependencies:
 
 find_package(ZLIB)
+include_directories(${ZLIB_INCLUDE_DIR})
 
 set(Boost_VERBOSE TRUE)
-find_package(Boost REQUIRED COMPONENTS iostreams)
+find_package(Boost QUIET COMPONENTS iostreams)
+if (${Boost_FOUND})
+  add_definitions(-DMINISAT_WITH_BOOST)
+  include_directories(${Boost_INCLUDE_DIR})
+endif()
 
-include_directories(${ZLIB_INCLUDE_DIR})
-include_directories(${Boost_INCLUDE_DIR})
 include_directories(${minisat_SOURCE_DIR})
 include (GenerateExportHeader)
 

@@ -25,6 +25,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <fstream>
 #include <iomanip>
@@ -34,12 +35,14 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <string>
 #include <sys/stat.h>
 
+#ifdef MINISAT_WITH_BOOST
 #include <boost/iostreams/device/file.hpp>
 #include <boost/iostreams/device/file_descriptor.hpp>
 #include <boost/iostreams/device/null.hpp>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_streambuf.hpp>
 #include <boost/iostreams/stream.hpp>
+#endif
 
 #include "minisat/core/Solver.h"
 #include "minisat/core/SolverTypes.h"
@@ -1115,16 +1118,21 @@ lbool Solver::solve_()
     std::string replay_base_path;
 
     if (static_cast<const char *>(opt_replay_dir) != nullptr) {
-        unsigned  solve_id = Global_solve_counter++;
-        replay_base_path = (
-            std::ostringstream{}
-                << (opt_replay_dir[0] == '\0' ? "." : opt_replay_dir) << "/solve"
-                << std::setw(5) << std::setfill('0') << solve_id).str();
+        unsigned solve_id = Global_solve_counter++;
+        replay_base_path = (std::ostringstream{} << (opt_replay_dir[0] == '\0' ? "." : opt_replay_dir)
+                                                 << "/solve" << std::setw(5) << std::setfill('0') << solve_id)
+                               .str();
 
         auto base_len = replay_base_path.size();
+#ifdef MINISAT_WITH_BOOST
         replay_base_path += ".p.cnf.gz";
+        bool write_successfull = toDimacsGz(replay_base_path.c_str(), assumptions, /*version=*/2);
+#else
+        replay_base_path += ".p.cnf";
+        bool write_successfull = toDimacs2(replay_base_path.c_str(), assumptions);
+#endif
 
-        if (!toDimacsGz(replay_base_path.c_str(), assumptions, /*custom impl*/true)) {
+        if (!write_successfull) {
             // Disable further replay writes.
             opt_replay_dir = nullptr;
             // Disable wrting the result.
@@ -1173,14 +1181,19 @@ lbool Solver::solve_()
 
             errno = 0;
             file.open(replay_base_path.c_str(), std::ios_base::trunc);
-            if (!file) throw std::runtime_error(strerror(errno));
+            if (!file)
+                throw std::runtime_error(strerror(errno));
 
-            if (status == l_True) file << "SAT";
-            else if (status == l_False) file << "UNSAT";
-            else file << "???";
+            if (status == l_True)
+                file << "SAT";
+            else if (status == l_False)
+                file << "UNSAT";
+            else
+                file << "???";
 
             file.close();
-            if (!file) throw std::runtime_error(strerror(errno));
+            if (!file)
+                throw std::runtime_error(strerror(errno));
 
             if (status == l_False) {
                 replay_base_path.resize(base_len);
@@ -1188,17 +1201,18 @@ lbool Solver::solve_()
                 replay_base_path += ".conflict";
 
                 file.open(replay_base_path.c_str(), std::ios_base::trunc);
-                if (!file) throw std::runtime_error(strerror(errno));
+                if (!file)
+                    throw std::runtime_error(strerror(errno));
 
                 for (Lit l : conflict.toVec())
                     file << (sign(l) ? "-" : "") << var(l) + 1 << '\n';
 
                 file.close();
-                if (!file) throw std::runtime_error(strerror(errno));
+                if (!file)
+                    throw std::runtime_error(strerror(errno));
 
                 replay_base_path.resize(base_len);
                 write_kind = "conflict problem";
-                replay_base_path += ".c.cnf.gz";
 
                 vec<Lit> neg_conflict;
                 neg_conflict.capacity(conflict.size());
@@ -1206,7 +1220,14 @@ lbool Solver::solve_()
                     neg_conflict.push(~l);
                 }
 
-                if (!toDimacsGz(replay_base_path.c_str(), neg_conflict, /*version=*/2))
+#ifdef MINISAT_WITH_BOOST
+                replay_base_path += ".c.cnf.gz";
+                bool write_successfull = toDimacsGz(replay_base_path.c_str(), neg_conflict, /*version=*/2);
+#else
+                replay_base_path += ".c.cnf";
+                bool write_successfull = toDimacs2(replay_base_path.c_str(), neg_conflict);
+#endif
+                if (!write_successfull)
                     opt_replay_dir = nullptr;
             }
         } catch (const std::exception &exc) {
@@ -1215,12 +1236,13 @@ lbool Solver::solve_()
         }
     }
 
-    assert((status != l_False || std::all_of(conflict.toVec().begin(), conflict.toVec().end(),
-                                             [this](Lit c) {
-                                                 return std::find(assumptions.begin(), assumptions.end(),
-                                                                  ~c) != assumptions.end();
-                                             })) &&
+    auto check_conflict = [this](Lit c) -> bool {
+        return std::find(assumptions.begin(), assumptions.end(), ~c) != assumptions.end();
+    };
+    assert((status != l_False ||
+            std::all_of(conflict.toVec().begin(), conflict.toVec().end(), check_conflict)) &&
            "incorrect conflict");
+    (void)check_conflict;
 
     if (status == l_True){
         // Extend & copy model:
@@ -1274,6 +1296,7 @@ static Var mapVar(Var x, vec<Var>& map, Var& max)
     return map[x];
 }
 
+#ifdef MINISAT_WITH_BOOST
 bool Solver::toDimacsGz(const char *file, const vec<Lit> &assumps, uint8_t version) const
 {
     assert(1 <= version && version <= 2 && "invalid toDimacs version");
@@ -1311,6 +1334,14 @@ bool Solver::toDimacsGz(const char *file, const vec<Lit> &assumps, uint8_t versi
     }
 }
 
+void Solver::toDimacs(FILE* f, const vec<Lit>& assumps)
+{
+    namespace io = boost::iostreams;
+    io::file_descriptor_sink f_sink(fileno(f), io::never_close_handle);
+    io::stream<io::file_descriptor_sink> f_stream(f_sink);
+    toDimacs(f_stream, assumps);
+}
+
 void Solver::toDimacs(FILE* f, Clause& c, vec<Var>& map, Var& max)
 {
     namespace io = boost::iostreams;
@@ -1318,6 +1349,7 @@ void Solver::toDimacs(FILE* f, Clause& c, vec<Var>& map, Var& max)
     io::stream<io::file_descriptor_sink> f_stream(f_sink);
     toDimacs(f_stream, c, map, max);
 }
+#endif // MINISAT_WITH_BOOST
 
 void Solver::toDimacs(std::ostream& os, const Clause& c, vec<Var>& map, Var& max) const
 {
@@ -1332,21 +1364,12 @@ void Solver::toDimacs(std::ostream& os, const Clause& c, vec<Var>& map, Var& max
 
 void Solver::toDimacs(const char *file, const vec<Lit>& assumps)
 {
-    FILE* f = fopen(file, "wr");
-    if (f == NULL)
-        fprintf(stderr, "could not open file %s\n", file), exit(1);
+    std::ofstream f(file);
+    if (!f)
+        fprintf(stderr, "could not open file %s: %s\n", file, strerror(errno)), exit(1);
     toDimacs(f, assumps);
-    fclose(f);
 }
 
-
-void Solver::toDimacs(FILE* f, const vec<Lit>& assumps)
-{
-    namespace io = boost::iostreams;
-    io::file_descriptor_sink f_sink(fileno(f), io::never_close_handle);
-    io::stream<io::file_descriptor_sink> f_stream(f_sink);
-    toDimacs(f_stream, assumps);
-}
 
 void Solver::toDimacs(std::ostream& os, const vec<Lit>& assumps) const
 {
@@ -1398,6 +1421,22 @@ void Solver::toDimacs(std::ostream& os, const vec<Lit>& assumps) const
         printf("Wrote DIMACS with %d variables and %d clauses.\n", max, cnt);
 }
 
+bool Solver::toDimacs2(const char *file, const vec<Lit> &assumps) const
+{
+    std::ofstream f(file);
+    if (!f) {
+        fprintf(stderr, "could not open file %s: %s\n", file, strerror(errno));
+        return false;
+    }
+
+    toDimacs2(f, assumps);
+    if (!f.flush()) {
+        fprintf(stderr, "could not write to file %s: %s\n", file, strerror(errno));
+        return false;
+    }
+
+    return true;
+}
 
 void Solver::toDimacs2(std::ostream &os, const vec<Lit> &assumps) const
 {
@@ -1421,11 +1460,11 @@ void Solver::toDimacs2(std::ostream &os, const vec<Lit> &assumps) const
 
     section_header(level0_cnt, "level 0");
     for (int i = 0; i < level0_cnt; ++i) {
-      dimacs_lit(trail[i]) << " 0\n";
+        dimacs_lit(trail[i]) << " 0\n";
     }
 
     section_header(clause_cnt, "clause");
-    for (CRef ref : clauses)  {
+    for (CRef ref : clauses) {
         const Clause &c = ca[ref];
         for (int i = 0; i < c.size(); ++i) {
             dimacs_lit(c[i]) << ' ';
@@ -1433,7 +1472,6 @@ void Solver::toDimacs2(std::ostream &os, const vec<Lit> &assumps) const
         os << "0\n";
     }
 }
-
 
 void Solver::printStats() const
 {
