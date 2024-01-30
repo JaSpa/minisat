@@ -67,24 +67,11 @@ static IntOption     opt_phase_saving      (_cat, "phase-saving", "Controls the 
 static BoolOption    opt_rnd_init_act      (_cat, "rnd-init",    "Randomize the initial activity", false);
 static BoolOption    opt_luby_restart      (_cat, "luby",        "Use the Luby restart sequence", true);
 static BoolOption    opt_trail_savings     (_cat, "save-trail",  "Save & restore the trail on level 1 when backtracking to level 0", true);
-#ifndef NDEBUG // verification is meaningless in NDEBUG builds
-static BoolOption    opt_trail_savings_chk (_cat, "verify-trail",  "Verify restored trail components using a nested solver", false);
-#endif
 static IntOption     opt_restart_first     (_cat, "rfirst",      "The base restart interval", 100, IntRange(1, INT32_MAX));
 static DoubleOption  opt_restart_inc       (_cat, "rinc",        "Restart interval increase factor", 2, DoubleRange(1, false, HUGE_VAL, false));
 static DoubleOption  opt_garbage_frac      (_cat, "gc-frac",     "The fraction of wasted memory allowed before a garbage collection is triggered",  0.20, DoubleRange(0, false, HUGE_VAL, false));
 static IntOption     opt_min_learnts_lim   (_cat, "min-learnts", "Minimum learnt clause limit",  0, IntRange(0, INT32_MAX));
 static StringOption  opt_replay_dir        (_cat, "replay-dir",  "When set, directory where to write replay information");
-
-template <class T>
-class LocalReset final {
-    T previous;
-    T &target;
-
- public:
-    LocalReset(T &target, T value) : target(target), previous(value) { std::swap(target, previous); }
-    ~LocalReset() { std::swap(target, previous); }
-};
 
 
 //=================================================================================================
@@ -143,10 +130,6 @@ Solver::Solver() :
   , propagation_budget (-1)
   , asynch_interrupt   (false)
 {
-#ifndef NDEBUG
-    if (trail_savings_ && opt_trail_savings_chk)
-        trail_savings_ = trail_savings_mode::checked();
-#endif
 }
 
 
@@ -901,22 +884,6 @@ bool Solver::restoreTrail()
     // The assumptions should be enqueued by now but nothing more.
     assert(decisionLevel() == 1);
 
-    // If the trail savings mode is set to `verify` we create a solver to verify the restored
-    // implications.
-    std::unique_ptr<Solver> restore_verifier;
-
-    // Verification is meaningless in NDEBUG builds because the result is verified using `assert()`.
-#ifndef NDEBUG
-    if (trail_savings() == trail_savings_mode::checked()) {
-        // Create a new solver with trail savings disabled.
-        restore_verifier = std::make_unique<Solver>();
-        restore_verifier->budgetOff();
-        restore_verifier->set_trail_savings(false);
-        // Clone our CNF into the new solver.
-        clone(*restore_verifier);
-    }
-#endif
-
     // Enqueue other saved literals. If trail savings is disabled this vector
     // will be empty.
     for (SavedLit saved : saved_trail) {
@@ -962,31 +929,6 @@ bool Solver::restoreTrail()
         if (value(saved.lit) == l_False) {
             analyzeFinal(saved.reason, conflict);
             return false;
-        }
-
-        // At this point we claim that the current assignment implies
-        // `saved.lit`. Verify this if we created the `restore_verifier` above.
-        if (restore_verifier) {
-            // Allocate an explicit capacity to avoid any extra reallocation.
-            restore_verifier->assumptions.capacity(trail.size() + 1);
-            // Copy the assumptions. (Clears any previous contents.)
-            assumptions.copyTo(restore_verifier->assumptions);
-            // As an additional assumption we add the negation of what we claim is implied.
-            restore_verifier->assumptions.push(~saved.lit);
-            // Disable replay writing during the verification solve.
-            LocalReset<const char *> disable_replays{opt_replay_dir, nullptr};
-            // Use the private `solve_` interface because we have written the assumptions directly.
-            lbool result = restore_verifier->solve_();
-            if (result != l_False) {
-                fprintf(stderr, "verification result: %s (should be UNSAT!)\n", result.as_str());
-
-                // Retry with the full trail.
-                trail.copyTo(restore_verifier->assumptions);
-                trail.push(~saved.lit);
-                fprintf(stderr, "re-using the full trail: %s\n", restore_verifier->solve_().as_str());
-
-                assert(false);
-            }
         }
 
         // printf("restore %6d ~> % 6d\n", saved.reason, (var(saved.lit)+1) * (sign(saved.lit) ? -1 : 1));

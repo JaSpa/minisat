@@ -33,28 +33,6 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 namespace Minisat {
 
-class trail_savings_mode {
-    uint8_t v;
-
-    constexpr explicit trail_savings_mode(int v) : v(v) {}
-
-public:
-    trail_savings_mode() : trail_savings_mode{disabled()} {}
-    trail_savings_mode(bool enabled) : trail_savings_mode{(int)enabled} {}
-
-    bool is_enabled() const { return v != 0; }
-
-    static constexpr trail_savings_mode disabled() { return trail_savings_mode{0}; }
-    static constexpr trail_savings_mode enabled() { return trail_savings_mode{1}; }
-    static constexpr trail_savings_mode checked() { return trail_savings_mode{2}; }
-
-    explicit operator bool() const { return is_enabled(); }
-
-    bool operator==(trail_savings_mode b) const { return v == b.v; }
-    bool operator!=(trail_savings_mode b) const { return v != b.v; }
-};
-
-
 //=================================================================================================
 // Solver -- the main class:
 
@@ -195,13 +173,13 @@ public:
     uint64_t dec_vars, num_clauses, num_learnts, clauses_literals, learnts_literals, max_literals, tot_literals;
 
 private:
-    trail_savings_mode trail_savings_;
+    bool trail_savings_;
 
 public:
-    trail_savings_mode trail_savings() const { return trail_savings_; }
-    void set_trail_savings(trail_savings_mode v, bool clear = true) {
-        trail_savings_ = v;
-        if (!v && clear) saved_trail.clear(true);
+    bool trail_savings() const { return trail_savings_; }
+    void set_trail_savings(bool use, bool clear = true) {
+        trail_savings_ = use;
+        if (!use && clear) saved_trail.clear(true);
     }
 
 protected:
