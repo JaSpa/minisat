@@ -67,15 +67,12 @@ static BoolOption    opt_luby_restart      (_cat, "luby",        "Use the Luby r
 static BoolOption    opt_trail_savings     (_cat, "save-trail",  "Save & restore the trail on level 1 when backtracking to level 0", true);
 #ifndef NDEBUG // verification is meaningless in NDEBUG builds
 static BoolOption    opt_trail_savings_chk (_cat, "verify-trail",  "Verify restored trail components using a nested solver", false);
-static BoolOption    opt_verify_solves     (_cat, "verify-solves", "Verify all solves with a saved trail against a solve without a saved trail", false);
 #endif
 static IntOption     opt_restart_first     (_cat, "rfirst",      "The base restart interval", 100, IntRange(1, INT32_MAX));
 static DoubleOption  opt_restart_inc       (_cat, "rinc",        "Restart interval increase factor", 2, DoubleRange(1, false, HUGE_VAL, false));
 static DoubleOption  opt_garbage_frac      (_cat, "gc-frac",     "The fraction of wasted memory allowed before a garbage collection is triggered",  0.20, DoubleRange(0, false, HUGE_VAL, false));
 static IntOption     opt_min_learnts_lim   (_cat, "min-learnts", "Minimum learnt clause limit",  0, IntRange(0, INT32_MAX));
 static StringOption  opt_replay_dir        (_cat, "replay-dir",  "When set, directory where to write replay information");
-static BoolOption    opt_debug_output      (_cat, "debug",       "Show debug output", false);
-static BoolOption    opt_verify_level_0    (_cat, "verify-0",    "Verify any learnings for level 0", false);
 
 template <class T>
 class LocalReset final {
@@ -86,8 +83,6 @@ class LocalReset final {
     LocalReset(T &target, T value) : target(target), previous(value) { std::swap(target, previous); }
     ~LocalReset() { std::swap(target, previous); }
 };
-
-#define MINISAT_DBG(fmt, ...) (opt_debug_output ? (void)fprintf(stderr, fmt __VA_OPT__(,) __VA_ARGS__) : (void)(0))
 
 
 //=================================================================================================
@@ -317,7 +312,6 @@ bool Solver::satisfied(const Clause& c) const {
 void Solver::cancelUntil(int level)
 {
     assert(level >= 0 && "invalid backtrack level");
-    MINISAT_DBG("C(%d)", level);
     if (decisionLevel() <= level)
         return;
 
@@ -849,27 +843,7 @@ bool Solver::handleSearchConfl(CRef confl, vec<Lit> &learnt_clause)
     analyze(confl, learnt_clause, backtrack_level);
     cancelUntil(backtrack_level);
 
-
-    MINISAT_DBG("L");
-
     if (learnt_clause.size() == 1) {
-        if (backtrack_level == 0 && opt_verify_level_0) {
-            LocalReset<const char *> disable_replays{opt_replay_dir, nullptr};
-            LocalReset<bool> disable_verify{opt_verify_solves, false};
-            LocalReset<bool> disable_verify0{opt_verify_level_0, false};
-            LocalReset<bool> disable_debug{opt_debug_output, false};
-
-            Solver s;
-            s.set_trail_savings(false);
-            clone(s);
-
-            s.assumptions.capacity(assumptions.size() + 1);
-            assumptions.copyTo(s.assumptions);
-            s.assumptions.push(~learnt_clause[0]);
-
-            auto res = s.solve_();
-            MINISAT_ASSERT(res == l_False, "actual: %s", res.as_str());
-        }
         uncheckedEnqueue(learnt_clause[0]);
     } else {
         CRef cr = ca.alloc(learnt_clause, true);
@@ -997,12 +971,8 @@ bool Solver::restoreTrail()
             assumptions.copyTo(restore_verifier->assumptions);
             // As an additional assumption we add the negation of what we claim is implied.
             restore_verifier->assumptions.push(~saved.lit);
-
             // Disable replay writing during the verification solve.
             LocalReset<const char *> disable_replays{opt_replay_dir, nullptr};
-            LocalReset<bool> disable_verify{opt_verify_solves, false};
-            LocalReset<bool> disable_verify0{opt_verify_level_0, false};
-
             // Use the private `solve_` interface because we have written the assumptions directly.
             lbool result = restore_verifier->solve_();
             if (result != l_False) {
@@ -1045,8 +1015,6 @@ lbool Solver::search(int nof_conflicts)
     int         conflictC = 0;
     vec<Lit>    learnt_clause;
     starts++;
-
-    MINISAT_DBG("Z(%d)", trail_lim.size() > 0 ? trail_lim[0] : trail.size());
 
     for (;;) {
         CRef confl = propagate();
@@ -1147,20 +1115,8 @@ lbool Solver::solve_()
     static std::atomic_uint Global_solve_counter;
     std::string replay_base_path;
 
-    lbool first_result = l_Undef;
-    if (opt_verify_solves && trail_savings() && saved_trail.size() > 0) {
-        LocalReset<const char *> disable_replays{opt_replay_dir, nullptr};
-
-        Solver v;
-        clone(v);
-        v.budgetOff();
-        v.set_trail_savings(false);
-        first_result = v.solve(assumptions) ? l_True : l_False;
-    }
-
     if (static_cast<const char *>(opt_replay_dir) != nullptr) {
         unsigned  solve_id = Global_solve_counter++;
-        MINISAT_DBG("<%u>", solve_id);
         replay_base_path = (
             std::ostringstream{}
                 << (opt_replay_dir[0] == '\0' ? "." : opt_replay_dir) << "/solve"
@@ -1260,8 +1216,6 @@ lbool Solver::solve_()
         }
     }
 
-    MINISAT_ASSERT(first_result == l_Undef || status == first_result,
-                   "trail savings OFF: %s\ntrail savings ON:  %s", first_result.as_str(), status.as_str());
     assert((status != l_False || std::all_of(conflict.toVec().begin(), conflict.toVec().end(),
                                              [this](Lit c) {
                                                  return std::find(assumptions.begin(), assumptions.end(),
